@@ -12,6 +12,7 @@ import {
   detectDocument,
   scanDocument,
   warmupScanner,
+  releaseScannerResources,
   // Tipos
   type DetectOptions,
   type DetectionMetadata,
@@ -140,6 +141,30 @@ ser rejeitada se o runtime não puder ser carregado. A promise do runtime é
 armazenada; se rejeitar, novas chamadas no mesmo processo recebem a mesma
 rejeição em vez de tentar inicializar novamente. A exceção não é sanitizada como
 `ScanErrorInfo` e deve permanecer em diagnóstico interno.
+
+### `releaseScannerResources()`
+
+```ts
+function releaseScannerResources(): void;
+```
+
+Esvazia o cache de operações do libvips que a codificação deixa para trás. Esse
+cache é limitado, mas nunca é recuperado sozinho: depois de um lote ele segura
+dezenas de megabytes até o processo terminar. Chame quando a aplicação tiver
+concluído o trabalho de digitalização.
+
+```ts
+await scanDocument("./foto.jpg");
+releaseScannerResources();
+```
+
+Digitalizações posteriores continuam funcionando; elas apenas perdem o cache
+aquecido. O cache é compartilhado por todo uso de `sharp` no processo, então a
+chamada também descarta entradas criadas por outras partes da aplicação.
+
+O runtime OpenCV **não** é liberado. Sua heap WebAssembly fica retida pelo módulo
+`@opencvjs/node` durante toda a vida do processo, e memória WebAssembly nunca é
+devolvida ao sistema operacional.
 
 ---
 

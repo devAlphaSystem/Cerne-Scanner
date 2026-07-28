@@ -1,7 +1,7 @@
 {
   "name": "cerne-scanner",
-  "version": "0.1.0",
-  "updated": "2026.07.26.1931",
+  "version": "0.2.0",
+  "updated": "2026.07.27.1014",
   "description": "Detecta folhas em fotografias, corrige perspectiva e devolve documentos em PNG, JPEG, WebP, PDF, bytes, Base64 ou Data URL usando somente CPU.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -55,7 +55,7 @@
     "format:check": "prettier --check .",
     "test": "node --test",
     "bench:fixtures": "node bench/fixtures.mjs",
-    "bench": "node bench/run.mjs",
+    "bench": "node --expose-gc bench/run.mjs",
     "security:audit": "npm audit --audit-level=low",
     "check": "tsc --noEmit && eslint . && prettier --check . && npm run build && npm test",
     "prepack": "npm run check",

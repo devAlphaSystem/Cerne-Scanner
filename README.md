@@ -139,6 +139,54 @@ const result = await scanDocument("./foto.webp", {
 - `paddingRatio`: expande os cantos antes da correção para reduzir cortes de
   borda.
 
+O realce domina o custo de memória e de tempo. Numa foto de 12,2 MP com saída de
+4,4 MP, o pico transitório medido por chamada é:
+
+| `enhancement` | pico   | tempo  |
+| ------------- | ------ | ------ |
+| `none`        | ~54 MB | ~1,1 s |
+| `color`       | ~54 MB | ~1,9 s |
+| `black-white` | ~72 MB | ~1,5 s |
+| `grayscale`   | ~75 MB | ~1,4 s |
+
+O pico é proporcional a `maxOutputPixels` e vale por chamada: N execuções
+simultâneas multiplicam esse valor por N. Ele não depende de forma relevante de
+`sharp.concurrency()`.
+
+A janela do realce de contraste local é proporcional à imagem, limitada a 192
+pixels por eixo. O teto só atua em saídas grandes — a partir de cerca de 1.500
+pixels de largura — e mantém a diferença em no máximo um nível de 255. Saídas
+menores usam a janela proporcional sem alteração.
+
+## Memória depois do trabalho
+
+O pico acima é transitório. O que permanece no processo depois que tudo termina:
+
+| Origem                        | Retido    | Liberável                      |
+| ----------------------------- | --------- | ------------------------------ |
+| Heap WebAssembly do OpenCV    | ~145 MB   | não, enquanto o processo viver |
+| Cache de operações do libvips | ~40–48 MB | `releaseScannerResources()`    |
+| Código dos módulos no heap V8 | ~24 MB    | não                            |
+
+```ts
+import { releaseScannerResources, scanDocument } from "cerne-scanner";
+
+await scanDocument("./foto.jpg");
+releaseScannerResources();
+```
+
+A heap do OpenCV é alocada na primeira detecção ou correção e tem tamanho fixo:
+ela não cresce com o tamanho da imagem, porque os rasters de análise e de origem
+são limitados antes de chegar ao OpenCV. Memória WebAssembly nunca é devolvida
+ao sistema operacional, e o módulo `@opencvjs/node` mantém o runtime enquanto o
+processo existir. Um processo que nunca digitaliza também nunca paga esse custo:
+o carregamento é preguiçoso.
+
+Para devolver também os ~145 MB do OpenCV entre rajadas de trabalho, isole a
+digitalização num processo filho reciclado — o custo de vazão é nulo e a memória
+volta inteira ao encerrar o filho. A receita medida está em
+[EXEMPLOS.md](docs/EXEMPLOS.md#isolando-a-digitalização-num-processo).
+
 ## CLI
 
 ```bash

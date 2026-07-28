@@ -48,6 +48,18 @@ sistema. Use `--repeats 3` e leve a sério só as diferenças acima de ~15%, ou 
 total da suíte. A saída, ao contrário do tempo, é determinística — uma
 divergência ali é sempre real.
 
+A coluna de memória é o pico de RSS durante o caso, medido por amostragem a cada
+10 ms sobre uma linha de base tirada depois de um GC. Ela responde "quanta
+memória este caso exige de um contêiner", não "quanta memória foi vazada" — o
+residual entre casos é baixo e não aparece aqui.
+
+O ruído é maior do que o do tempo: o RSS é contabilidade do sistema operacional e
+o alocador devolve páginas quando quer, então um caso isolado pode oscilar 30%
+sem que nada tenha mudado. Trate como sinal confiável o **pico máximo da suíte**,
+e per-caso só com `--repeats 3` e diferenças acima de ~40%. `npm run bench` já
+passa `--expose-gc`; rodando `node bench/run.mjs` direto, sem essa flag, as
+linhas de base ficam sujas e os picos saem inflados.
+
 ## Fixtures
 
 | Fixture                 | Caminho exercitado                                        |

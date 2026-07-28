@@ -165,6 +165,83 @@ imagem específica. A promise rejeitada fica armazenada: novas chamadas no mesmo
 processo não tentam carregar o runtime outra vez. A exceção é bruta e deve ficar
 nos logs internos, sem ser devolvida diretamente a clientes.
 
+## Devolvendo memória ao fim de um lote
+
+A codificação alimenta o cache de operações do libvips, que permanece ocupado
+depois que o trabalho acaba. Em processos que digitalizam em rajadas e depois
+ficam ociosos, esvazie o cache ao fim de cada lote:
+
+```ts
+import { releaseScannerResources, scanDocument } from "cerne-scanner";
+
+async function processarLote(caminhos: string[]) {
+  try {
+    for (const caminho of caminhos) {
+      const resultado = await scanDocument(caminho);
+      // ... entregue o resultado
+    }
+  } finally {
+    releaseScannerResources();
+  }
+}
+```
+
+A chamada é síncrona, não invalida nada além do cache e pode ser repetida. Não
+use dentro do laço: o cache existe justamente para acelerar imagens em sequência.
+
+## Isolando a digitalização num processo
+
+`releaseScannerResources` devolve o cache do libvips, mas a heap WebAssembly do
+OpenCV — em torno de 145 MB — fica retida pelo módulo `@opencvjs/node` enquanto o
+processo existir, e memória WebAssembly nunca volta ao sistema operacional. Se o
+seu serviço digitaliza em rajadas e precisa devolver essa memória entre elas, a
+única saída é encerrar o processo que carregou o runtime.
+
+Medido em 24 digitalizações de uma foto de 4,3 MP:
+
+| Arranjo             | Vazão       | Memória depois                         |
+| ------------------- | ----------- | -------------------------------------- |
+| No próprio processo | 964 ms/scan | ~237 MB presos até o processo morrer   |
+| Em processo filho   | 966 ms/scan | ~224 MB devolvidos ao encerrar o filho |
+
+O isolamento não custa vazão: o trabalho é dominado por CPU, não por transporte.
+
+```ts
+// scanner-worker.mjs — só este processo carrega o runtime pesado
+import { scanDocument } from "cerne-scanner";
+
+process.on("message", async ({ caminho }) => {
+  const resultado = await scanDocument(caminho, { output: { encoding: "base64" } });
+  process.send(resultado);
+});
+process.send({ ready: true });
+```
+
+```ts
+// no serviço: recicle o filho a cada N trabalhos
+import { fork } from "node:child_process";
+
+let filho = null;
+let processados = 0;
+
+function obterFilho() {
+  if (filho === null || processados >= 50) {
+    filho?.kill();
+    filho = fork("./scanner-worker.mjs");
+    processados = 0;
+  }
+  processados += 1;
+  return filho;
+}
+```
+
+`worker_threads` também funciona, mas devolve menos: cada thread carrega sua
+própria cópia do runtime (~206 MB medidos) porque o registro de módulos é por
+isolate, e `terminate()` recupera ~157 MB desses — o restante é memória nativa
+do `sharp`, que pertence ao processo e não à thread. Prefira `child_process`
+quando o objetivo for devolver memória; prefira `worker_threads` quando o
+objetivo for apenas paralelismo.
+
 ## Formatos e representações
 
 ### Buffer

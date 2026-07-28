@@ -14,19 +14,62 @@ export interface EncodedOutput {
   mimeType: string;
 }
 
-function enhancedPipeline(image: WarpedImage, enhancement: EnhancementMode): Sharp {
-  let pipeline = sharp(Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength), { raw: { width: image.width, height: image.height, channels: 4 } }).flatten({ background: "#ffffff" });
-  const regionWidth = Math.max(32, Math.round(image.width / 8));
-  const regionHeight = Math.max(32, Math.round(image.height / 8));
-  const sharpen = { sigma: 0.7, m1: 0.35, m2: 0.8, x1: 3, y2: 4, y3: 7 } as const;
-  if (enhancement === "color") pipeline = pipeline.clahe({ width: regionWidth, height: regionHeight, maxSlope: 1 }).sharpen(sharpen);
-  if (enhancement === "grayscale") pipeline = pipeline.greyscale().clahe({ width: regionWidth, height: regionHeight, maxSlope: 1 }).sharpen(sharpen);
-  if (enhancement === "black-white") pipeline = pipeline.greyscale().clahe({ width: regionWidth, height: regionHeight, maxSlope: 2 }).threshold(178);
-  return pipeline;
+const SHARPEN = { sigma: 0.7, m1: 0.35, m2: 0.8, x1: 3, y2: 4, y3: 7 } as const;
+
+/**
+ * Caps the contrast-limiting window, whose cost in libvips grows with its area.
+ *
+ * An eight-by-eight grid is the classic CLAHE tiling, but on a large scan it
+ * produces windows of several hundred pixels that dominate both time and memory
+ * without changing the result: capping at this size moves output by at most one
+ * level in two hundred and fifty-five. Smaller scans keep the proportional
+ * window untouched, because it already falls below the cap.
+ */
+const MAX_CLAHE_WINDOW = 192;
+
+/**
+ * Writes a pipeline to an intermediate raster and reopens it as a new source.
+ *
+ * @param {Sharp} pipeline - The pipeline whose result should be materialized.
+ * @returns {Promise<Sharp>} Resolves with a pipeline reading the materialized raster.
+ * @throws {Error} If the intermediate raster cannot be produced.
+ */
+async function materialize(pipeline: Sharp): Promise<Sharp> {
+  const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
+  return sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } });
+}
+
+/**
+ * Builds the enhancement pipeline for a warped raster.
+ *
+ * `clahe` is the expensive step: libvips buffers its input once per worker
+ * thread, so running it over a live pipeline makes peak memory scale with
+ * `sharp.concurrency()`. Materializing everything that precedes it bounds that
+ * to a single copy. libvips also runs `sharpen` before `clahe` regardless of
+ * call order, so putting `sharpen` in the first stage keeps the operation order
+ * — and therefore the output bytes — unchanged.
+ *
+ * @param {WarpedImage} image - The perspective-corrected RGBA raster to enhance.
+ * @param {EnhancementMode} enhancement - The tonal enhancement to apply.
+ * @returns {Promise<Sharp>} Resolves with the pipeline that produces the enhanced image.
+ * @throws {Error} If an intermediate raster cannot be produced.
+ */
+async function enhancedPipeline(image: WarpedImage, enhancement: EnhancementMode): Promise<Sharp> {
+  const source = sharp(Buffer.from(image.data.buffer, image.data.byteOffset, image.data.byteLength), { raw: { width: image.width, height: image.height, channels: 4 } }).flatten({ background: "#ffffff" });
+  if (enhancement === "none") return source;
+
+  const window = {
+    width: Math.min(MAX_CLAHE_WINDOW, Math.max(32, Math.round(image.width / 8))),
+    height: Math.min(MAX_CLAHE_WINDOW, Math.max(32, Math.round(image.height / 8))),
+    maxSlope: enhancement === "black-white" ? 2 : 1,
+  };
+  if (enhancement === "black-white") return (await materialize(source.greyscale())).greyscale().clahe(window).threshold(178);
+  if (enhancement === "grayscale") return (await materialize(source.greyscale().sharpen(SHARPEN))).greyscale().clahe(window);
+  return (await materialize(source.sharpen(SHARPEN))).clahe(window);
 }
 
 async function encodeRaster(image: WarpedImage, enhancement: EnhancementMode, format: Exclude<OutputFormat, "pdf">, quality: number): Promise<Buffer> {
-  const pipeline = enhancedPipeline(image, enhancement);
+  const pipeline = await enhancedPipeline(image, enhancement);
   if (format === "jpeg") return pipeline.jpeg({ quality, chromaSubsampling: "4:4:4", progressive: true }).toBuffer();
   if (format === "webp") return pipeline.webp({ quality, smartSubsample: true }).toBuffer();
   return pipeline.png({ compressionLevel: 6, adaptiveFiltering: true, palette: enhancement === "black-white" }).toBuffer();
