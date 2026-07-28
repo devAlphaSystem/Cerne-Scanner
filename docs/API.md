@@ -1,227 +1,125 @@
-# API
+# Referência da API
 
-Referência completa da superfície pública de `cerne-scanner`. Para receitas de
-uso, veja [EXEMPLOS.md](EXEMPLOS.md); para a linha de comando, veja
-[CLI.md](CLI.md).
+## Importação
 
-## Superfície exportada
+ESM:
 
-```ts
-import {
-  // Operações
-  detectDocument,
-  scanDocument,
-  warmupScanner,
-  releaseScannerResources,
-  // Tipos
-  type DetectOptions,
-  type DetectionMetadata,
-  type DetectionMethod,
-  type DetectionResult,
-  type DocumentCorners,
-  type DocumentDetection,
-  type EncodedScanData,
-  type EnhancementMode,
-  type InputImageFormat,
-  type OutputEncoding,
-  type OutputFormat,
-  type OutputOptions,
-  type PaperSize,
-  type PerformanceProfile,
-  type Point,
-  type ScanErrorCode,
-  type ScanErrorInfo,
-  type ScanInput,
-  type ScanMetadata,
-  type ScanOptions,
-  type ScanOutputInfo,
-  type ScanResult,
-  type ScanStatus,
-} from "cerne-scanner";
+```js
+import { detectDocument, releaseScannerResources, scanDocument, warmupScanner } from "cerne-scanner";
 ```
 
-Tudo o mais é interno. `ResolvedOptions`, `InvalidOptionsError`, `ScanFailure`,
-`getOpenCv` e os módulos de `document/`, `detection/`, `geometry/`, `output/` e
-`processing/` não fazem parte do contrato público e podem mudar sem aviso.
+CommonJS:
 
-Não existe API de lote nem de composição de PDF multipágina. Cada chamada
-processa uma imagem.
+```js
+const { detectDocument, releaseScannerResources, scanDocument, warmupScanner } = require("cerne-scanner");
+```
 
----
+O pacote fornece declarações TypeScript separadas para ESM e CommonJS. A superfície pública é definida em [`src/index.ts`](../src/index.ts); helpers internos não fazem parte do contrato publicado.
 
 ## Entradas
 
 `ScanInput` aceita:
 
-| Forma                      | Observação                                 |
-| -------------------------- | ------------------------------------------ |
-| `string` com caminho local | Caminho resolvido pelo sistema de arquivos |
-| `string` com URL           | Somente `http://` e `https://` completos   |
-| `ArrayBuffer`              | Bytes copiados para memória própria        |
-| `Uint8Array` / `Buffer`    | Bytes copiados; `Buffer` é um `Uint8Array` |
+| Tipo                                 | Tratamento                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------------- |
+| `string` com `http://` ou `https://` | Download GET com redirects manuais, limite de tamanho e cancelamento.            |
+| Outra `string`                       | Caminho de arquivo local.                                                        |
+| `ArrayBuffer`                        | Copiado para memória própria antes do processamento.                             |
+| `Uint8Array`                         | Copiado para memória própria. `Buffer` funciona por ser subtipo de `Uint8Array`. |
 
-Assinaturas reconhecidas: JPEG, PNG, WebP, TIFF, AVIF e HEIF. A decisão usa os
-bytes; extensão, `Content-Type` e nome do arquivo não influenciam a aceitação. A
-imagem é orientada conforme EXIF antes de detectar ou validar cantos.
+Strings vazias e esquemas remotos diferentes de HTTP(S) são rejeitados. URLs não podem conter usuário/senha; autenticação remota deve usar `requestHeaders`.
 
-A decodificação depende dos codecs disponíveis no `sharp`/`libvips`. Em
-particular, HEIC baseado em HEVC normalmente exige um `libvips` global compilado
-com suporte adicional; sem ele, o contêiner pode ser reconhecido e ainda assim
-retornar `INVALID_IMAGE`.
+O formato é detectado pelos bytes, não pela extensão:
 
-Cada entrada deve ter uma única página ou quadro estático. PDF é suportado
-somente como **saída**.
+```ts
+type InputImageFormat = "jpeg" | "png" | "webp" | "tiff" | "avif" | "heif";
+```
 
----
+Somente uma imagem estática é processada. Animações e contêineres multipágina são devolvidos como `UNSUPPORTED_FORMAT`.
 
-## Operações
-
-### `scanDocument(input, options?)`
+## `scanDocument`
 
 ```ts
 function scanDocument<TEncoding extends OutputEncoding = "buffer">(input: ScanInput, options?: ScanOptions<TEncoding>): Promise<ScanResult<TEncoding>>;
 ```
 
-Carrega a imagem, encontra ou valida os cantos, corrige a perspectiva, aplica o
-realce e codifica a saída solicitada. O genérico associa `output.encoding` ao
-tipo de `data`:
+Executa carregamento, inspeção, detecção (ou cantos manuais), padding, cálculo de dimensões, correção de perspectiva, realce e codificação.
 
-```ts
-const binario = await scanDocument("./foto.jpg");
-// binario.data: Buffer | null
-
-const textual = await scanDocument("./foto.jpg", {
-  output: { format: "jpeg", encoding: "base64" },
+```js
+const result = await scanDocument("./foto.jpg", {
+  output: { format: "jpeg", encoding: "base64", quality: 88 },
+  enhancement: "grayscale",
+  paperSize: "auto",
 });
-// textual.data: string | null
+
+if (result.success && result.data !== null) {
+  console.log(result.status, result.output?.mimeType, result.data.length);
+}
 ```
 
-`ScanResult` não é uma união discriminada. Mesmo depois de verificar
-`result.success`, confira `Buffer.isBuffer(result.data)`,
-`typeof result.data === "string"` ou `result.data !== null` antes de consumir o
-valor.
+Falhas esperadas de validação, I/O, limite, cancelamento e processamento são convertidas em `ScanResult` com `status: "error"`; o chamador não precisa capturá-las para obter o código estável. Erros externos ao contrato normal de execução, como falha do próprio runtime ao escrever/logar o resultado do chamador, continuam sendo responsabilidade da aplicação.
 
-Falhas de validação, carregamento, detecção, transformação e codificação são
-convertidas em `result.error`; não rejeitam a promise como fluxo normal.
-
-### `detectDocument(input, options?)`
+## `detectDocument`
 
 ```ts
 function detectDocument(input: ScanInput, options?: DetectOptions): Promise<DetectionResult>;
 ```
 
-Executa carregamento, inspeção e seleção do quadrilátero, mas não corrige a
-perspectiva, não aplica realce e não codifica saída. `DetectOptions` é:
+`DetectOptions` omite `output`, `enhancement`, `paperSize` e `maxOutputPixels`. A função devolve cantos e evidências sem produzir raster corrigido.
 
-```ts
-type DetectOptions = Omit<ScanOptions, "output" | "enhancement" | "paperSize" | "maxOutputPixels">;
+```js
+const result = await detectDocument(bytes, {
+  performance: "accurate",
+  minConfidence: 0.65,
+  allowFrameFallback: false,
+});
+
+if (result.detection !== null) {
+  console.log(result.detection.method, result.detection.areaRatio);
+}
 ```
 
-`paddingRatio` permanece no tipo compartilhado, porém só é aplicado por
-`scanDocument`; não altera os cantos devolvidos por `detectDocument`.
-
-Falhas também chegam estruturadas em `DetectionResult.error`.
-
-### `warmupScanner()`
-
-```ts
-function warmupScanner(): Promise<void>;
-```
-
-Inicializa antecipadamente o runtime OpenCV.js compartilhado pelo processo.
-Use antes de receber a primeira tarefa quando a latência de inicialização
-importar:
-
-```ts
-await warmupScanner();
-```
-
-Diferentemente das duas operações de resultado estruturado, essa promise pode
-ser rejeitada se o runtime não puder ser carregado. A promise do runtime é
-armazenada; se rejeitar, novas chamadas no mesmo processo recebem a mesma
-rejeição em vez de tentar inicializar novamente. A exceção não é sanitizada como
-`ScanErrorInfo` e deve permanecer em diagnóstico interno.
-
-### `releaseScannerResources()`
-
-```ts
-function releaseScannerResources(): void;
-```
-
-Esvazia o cache de operações do libvips que a codificação deixa para trás. Esse
-cache é limitado, mas nunca é recuperado sozinho: depois de um lote ele segura
-dezenas de megabytes até o processo terminar. Chame quando a aplicação tiver
-concluído o trabalho de digitalização.
-
-```ts
-await scanDocument("./foto.jpg");
-releaseScannerResources();
-```
-
-Digitalizações posteriores continuam funcionando; elas apenas perdem o cache
-aquecido. O cache é compartilhado por todo uso de `sharp` no processo, então a
-chamada também descarta entradas criadas por outras partes da aplicação.
-
-O runtime OpenCV **não** é liberado. Sua heap WebAssembly fica retida pelo módulo
-`@opencvjs/node` durante toda a vida do processo, e memória WebAssembly nunca é
-devolvida ao sistema operacional.
-
----
+Com `manualCorners`, a função valida os pontos e não decodifica um raster de detecção automática. Ela ainda lê bytes e metadados para validar formato, orientação e dimensões.
 
 ## Opções
 
-### `ScanOptions`
-
-| Opção                   | Tipo                               | Padrão              | Faixa/valores                      |
-| ----------------------- | ---------------------------------- | ------------------- | ---------------------------------- |
-| `performance`           | `PerformanceProfile`               | `"balanced"`        | `fast`, `balanced`, `accurate`     |
-| `output.format`         | `OutputFormat`                     | `"png"`             | `png`, `jpeg`, `webp`, `pdf`       |
-| `output.encoding`       | `OutputEncoding`                   | `"buffer"`          | `buffer`, `base64`, `data-url`     |
-| `output.quality`        | `number`                           | `92`                | inteiro `1..100`                   |
-| `enhancement`           | `EnhancementMode`                  | `"color"`           | quatro modos                       |
-| `paperSize`             | `PaperSize`                        | `"detected"`        | `detected`, `auto`, `a4`, `letter` |
-| `manualCorners`         | `DocumentCorners`                  | nenhum              | quadrilátero válido                |
-| `minConfidence`         | `number`                           | `0.58`              | `0..1`                             |
-| `minDocumentAreaRatio`  | `number`                           | `0.12`              | `0.02..0.95`                       |
-| `paddingRatio`          | `number`                           | `0.003`             | `0..0.05`                          |
-| `allowFrameFallback`    | `boolean`                          | `true`              | —                                  |
-| `detectionMaxDimension` | `number`                           | do perfil           | inteiro `320..4096`                |
-| `maxFileSizeBytes`      | `number`                           | `41943040` (40 MiB) | inteiro `1..1073741824`            |
-| `maxInputPixels`        | `number`                           | do perfil           | inteiro `250000..250000000`        |
-| `maxOutputPixels`       | `number`                           | do perfil           | inteiro `250000..100000000`        |
-| `timeoutMs`             | `number`                           | do perfil           | inteiro `0..3600000`; `0` desliga  |
-| `requestHeaders`        | `Readonly<Record<string, string>>` | nenhum              | somente com URL                    |
-| `signal`                | `AbortSignal`                      | nenhum              | cancelamento cooperativo           |
-
-Tipos inválidos e números fora da faixa produzem
-`error.code === "INVALID_OPTIONS"`. Opções de limite marcadas como inteiras
-recusam frações. `minConfidence`, `minDocumentAreaRatio` e `paddingRatio`
-aceitam números finitos fracionários.
-
-Em JavaScript, chaves desconhecidas no objeto principal ou em `output` são
-ignoradas silenciosamente. Um erro como `timeoutMS` aplica o padrão em vez de
-falhar; use TypeScript ou valide a configuração da aplicação. Propriedades
-exclusivas de `scanDocument` também podem ser aceitas em runtime por
-`detectDocument`, mas não produzem saída nem efeito visual nessa operação.
-
-### Perfis de desempenho
+### Padrões por perfil
 
 | Perfil     | `detectionMaxDimension` | `maxInputPixels` | `maxOutputPixels` | `timeoutMs` |
-| ---------- | ----------------------- | ---------------- | ----------------- | ----------- |
-| `fast`     | 960                     | 60.000.000       | 20.000.000        | 20.000      |
-| `balanced` | 1.440                   | 100.000.000      | 32.000.000        | 60.000      |
-| `accurate` | 2.048                   | 160.000.000      | 50.000.000        | 120.000     |
+| ---------- | ----------------------: | ---------------: | ----------------: | ----------: |
+| `fast`     |                     960 |       60.000.000 |         4.000.000 |      20.000 |
+| `balanced` |                   1.440 |      100.000.000 |         8.000.000 |      60.000 |
+| `accurate` |                   2.048 |      160.000.000 |        16.000.000 |     120.000 |
 
-O perfil fornece padrões e seleciona a profundidade do algoritmo. Valores
-informados explicitamente prevalecem. Em linhas gerais:
+O perfil padrão é `balanced`. Valores explícitos das quatro opções substituem o padrão do perfil, desde que estejam na faixa aceita.
 
-- `fast` usa um mapa de bordas, menos candidatos e não refina o quadrilátero;
-- `balanced` usa mapas adicionais, mais candidatos e refinamento de borda;
-- `accurate` adiciona um mapa local, sempre executa a busca por linhas e usa
-  interpolação cúbica na correção; os outros perfis usam interpolação linear e
-  só recorrem às linhas quando o melhor contorno fica abaixo do limiar interno.
+`fast` usa menos mapas e candidatos; `balanced` amplia a análise e refina o candidato; `accurate` adiciona limiar adaptativo, mais simplificações de contorno e interpolação cúbica no warp. A busca por linhas é sempre executada em `accurate`; em `fast` e `balanced`, ela ocorre quando o melhor contorno pontua abaixo de 0,72 ou não existe.
 
-### Saída e qualidade
+### Tabela completa
+
+| Opção                   | Padrão     | Validação e efeito                                                                                                      |
+| ----------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `performance`           | `balanced` | `fast`, `balanced` ou `accurate`.                                                                                       |
+| `output.format`         | `png`      | `png`, `jpeg`, `webp` ou `pdf`.                                                                                         |
+| `output.encoding`       | `buffer`   | `buffer`, `base64` ou `data-url`.                                                                                       |
+| `output.quality`        | `92`       | Inteiro de 1 a 100; afeta JPEG, WebP e raster JPEG do PDF.                                                              |
+| `enhancement`           | `color`    | `none`, `color`, `grayscale` ou `black-white`. Somente em `scanDocument`.                                               |
+| `paperSize`             | `detected` | `detected`, `auto`, `a4` ou `letter`. Somente em `scanDocument`.                                                        |
+| `manualCorners`         | ausente    | Quatro pontos finitos em coordenadas da origem orientada por EXIF; pula a detecção automática.                          |
+| `minConfidence`         | `0.58`     | Número de 0 a 1; menor nota automática aceita.                                                                          |
+| `minDocumentAreaRatio`  | `0.12`     | Número de 0,02 a 0,95; menor área considerada durante a geração automática de candidatos.                               |
+| `minSuccessAreaRatio`   | `0.20`     | Número de 0 a 0,95; candidato automático menor que isso produz `partial`, mesmo que passe confiança.                    |
+| `paddingRatio`          | `0.003`    | Número de 0 a 0,05; expande os cantos antes da transformação. Não altera `detectDocument`.                              |
+| `allowFrameFallback`    | `true`     | Permite usar a imagem inteira como documento parcial quando sua aparência for compatível.                               |
+| `detectionMaxDimension` | por perfil | Inteiro de 320 a 4.096; maior eixo do raster de detecção automática.                                                    |
+| `maxFileSizeBytes`      | 40 MiB     | Inteiro de 1 byte a 1 GiB; limita arquivo, download ou bytes em memória.                                                |
+| `maxInputPixels`        | por perfil | Inteiro de 250.000 a 250.000.000; limita área orientada declarada antes do raster.                                      |
+| `maxOutputPixels`       | por perfil | Inteiro de 250.000 a 100.000.000; limita o raster corrigido. Somente em `scanDocument`.                                 |
+| `timeoutMs`             | por perfil | Inteiro de 0 a 3.600.000; zero desativa deadline.                                                                       |
+| `requestHeaders`        | ausente    | Objeto simples de strings para URL HTTP(S); nomes são validados/normalizados e cabeçalhos de transporte são bloqueados. |
+| `signal`                | ausente    | `AbortSignal` usado no carregamento e nos pontos de verificação do processamento.                                       |
+
+### Formato de saída
 
 ```ts
 interface OutputOptions<TEncoding extends OutputEncoding = OutputEncoding> {
@@ -231,102 +129,93 @@ interface OutputOptions<TEncoding extends OutputEncoding = OutputEncoding> {
 }
 ```
 
-`quality` controla JPEG, WebP e o JPEG incorporado ao PDF. PNG é sem perdas e
-ignora essa opção. No modo `black-white`, o PDF incorpora PNG e também ignora
-`quality`.
+| Encoding   | Tipo de `result.data` | Conteúdo                            |
+| ---------- | --------------------- | ----------------------------------- |
+| `buffer`   | `Buffer`              | Bytes codificados.                  |
+| `base64`   | `string`              | Somente o payload Base64.           |
+| `data-url` | `string`              | `data:<mimeType>;base64,<payload>`. |
 
-Base64 aumenta o texto em aproximadamente um terço em relação aos bytes; Data
-URL acrescenta ainda o prefixo do tipo de mídia. Para imagens grandes, prefira
-`buffer` e fluxo binário da aplicação.
+`result.output.byteLength` sempre mede os bytes binários antes da conversão para texto.
 
 ### Realce
 
-| Modo          | Tratamento                                          |
-| ------------- | --------------------------------------------------- |
-| `none`        | Mantém as cores corrigidas sem realce tonal         |
-| `color`       | Contraste local conservador e nitidez, mantendo cor |
-| `grayscale`   | Escala de cinza, contraste local e nitidez          |
-| `black-white` | Escala de cinza, contraste e limiarização binária   |
+- `none`: mantém o raster corrigido sem realce, achatando alpha sobre branco.
+- `color`: nitidez e equalização local de contraste com cor preservada.
+- `grayscale`: tons de cinza, nitidez e equalização local.
+- `black-white`: cinza, equalização e binarização; PNG usa paleta e PDF incorpora PNG.
 
-Transparência é achatada sobre fundo branco durante a decodificação.
+### Papel
 
-### Proporção do papel
+- `detected`: mantém a proporção calculada dos lados.
+- `a4`: força a razão 210/297.
+- `letter`: força a razão 8,5/11.
+- `auto`: ajusta para a opção mais próxima somente quando a razão observada está a até 2,5% de A4 ou Letter; do contrário resolve para `detected`.
 
-- `detected`: preserva a proporção calculada a partir dos quatro lados.
-- `a4`: força a proporção `210 / 297`, mantendo retrato ou paisagem.
-- `letter`: força a proporção `8.5 / 11`.
-- `auto`: encaixa em A4 ou Carta somente se o erro relativo da proporção for de
-  no máximo 2,5%; caso contrário mantém `detected`.
+`metadata.paperSize` registra o valor efetivamente resolvido quando existe saída.
 
-`maxOutputPixels` pode reduzir largura e altura, preservando a proporção. O
-valor efetivamente resolvido aparece em `metadata.paperSize`.
-
-PDF é sempre uma página raster. A página usa dimensões A4 ou Carta quando esse
-foi o papel resolvido; no modo `detected`, a maior dimensão usa o comprimento de
-uma folha A4 e a outra acompanha a proporção da imagem.
-
-### `manualCorners`
+### Cantos manuais
 
 ```ts
-interface Point {
-  x: number;
-  y: number;
-}
-
 interface DocumentCorners {
-  topLeft: Point;
-  topRight: Point;
-  bottomRight: Point;
-  bottomLeft: Point;
+  topLeft: { x: number; y: number };
+  topRight: { x: number; y: number };
+  bottomRight: { x: number; y: number };
+  bottomLeft: { x: number; y: number };
 }
 ```
 
-As coordenadas pertencem à imagem **depois da orientação EXIF**. Os quatro
-pontos precisam ser finitos, distintos e formar um quadrilátero convexo e
-geometricamente utilizável. A validação admite uma tolerância de até 1% do maior
-eixo fora dos limites declarados da imagem.
+As coordenadas usam pixels da imagem depois da orientação EXIF, com origem no canto superior esquerdo. O validador:
 
-Quando os cantos são fornecidos:
+- exige quatro pares finitos;
+- reordena geometricamente em sentido horário a partir do canto superior esquerdo;
+- exige quadrilátero convexo, não degenerado e bem condicionado;
+- tolera até 1% do maior eixo além dos limites para absorver pequenas imprecisões;
+- exige pontos distintos e lados utilizáveis.
 
-- a busca automática é ignorada;
-- `method` vale `"manual"`;
-- `confidence` vale `1` e `edgeSupport` vale `0`;
-- `candidatesEvaluated` vale `0`;
-- `minConfidence` e `minDocumentAreaRatio` não filtram o quadrilátero.
+Detecção manual recebe `confidence: 1`, `method: "manual"`, `edgeSupport: 0` e `candidatesEvaluated: 0`. Ela pode continuar sendo `partial` se tocar o quadro da imagem.
 
-Nesse caminho, `confidence: 1` significa que o pacote confiou na geometria
-fornecida; não mede foco, legibilidade nem qualidade da fotografia. Para
-`touchesFrame`, "tocar" significa entrar numa margem de 1,2% do menor eixo, não
-apenas coincidir com o último pixel. Esses casos ainda produzem
-`status: "partial"`.
+### Cabeçalhos remotos
 
-`paddingRatio` expande uma cópia interna dos cantos usada no warp. Os cantos em
-`result.detection` continuam sendo os originais detectados ou fornecidos.
-
-### `requestHeaders`
-
-Aceito somente quando `input` é uma URL HTTP/HTTPS e somente com valores string.
-Nomes são normalizados para minúsculas e validados pelo Node.js. São recusados:
-
-- nomes duplicados quando comparados sem diferenciar maiúsculas;
-- objetos com protótipo diferente de `Object.prototype` ou `null`;
-- os cabeçalhos reservados pelo componente de download:
-
-```text
-accept-encoding, connection, content-length, expect, host, if-range,
-keep-alive, proxy-connection, range, te, trailer, transfer-encoding, upgrade
+```js
+const result = await scanDocument("https://arquivos.exemplo/documento.jpg", {
+  requestHeaders: { authorization: `Bearer ${token}` },
+});
 ```
 
-O pacote não realiza login nem mantém cookies. A aplicação chamadora responde
-pelas credenciais e pelo estado da sessão.
+Os cabeçalhos são removidos após redirect para outra origem ou downgrade de HTTPS para HTTP. Antes de aceitar URLs fornecidas por usuários, valide o protocolo e a origem, restrinja destinos de rede conforme a política da aplicação e não registre credenciais nem o conteúdo processado.
 
----
+## Resultado de detecção
+
+```ts
+interface DetectionResult {
+  status: "success" | "partial" | "not_found" | "error";
+  success: boolean;
+  detection: DocumentDetection | null;
+  metadata: DetectionMetadata;
+  warnings: string[];
+  error: ScanErrorInfo | null;
+}
+```
+
+### `DocumentDetection`
+
+| Campo                 | Significado                                                                  |
+| --------------------- | ---------------------------------------------------------------------------- |
+| `corners`             | Quatro cantos no espaço da imagem de origem orientada.                       |
+| `confidence`          | Nota normalizada de 0 a 1.                                                   |
+| `method`              | `contour`, `lines`, `frame` ou `manual`.                                     |
+| `areaRatio`           | Área do quadrilátero dividida pela área da origem.                           |
+| `edgeSupport`         | Fração das amostras de borda apoiadas pelo mapa de bordas.                   |
+| `touchesFrame`        | Algum canto está dentro de uma margem de 1,2% do menor eixo junto ao quadro. |
+| `candidatesEvaluated` | Quantidade de candidatos examinados antes da seleção.                        |
+
+`confidence` não é probabilidade calibrada nem garantia de página completa. Um retângulo interno bem definido pode pontuar alto; `minSuccessAreaRatio`, `status` e `warnings` existem para marcar esse risco.
 
 ## Resultado de digitalização
 
 ```ts
 interface ScanResult<TEncoding extends OutputEncoding = "buffer"> {
-  status: "success" | "partial" | "not_found" | "error";
+  status: ScanStatus;
   success: boolean;
   confidence: number;
   data: EncodedScanData<TEncoding> | null;
@@ -338,227 +227,102 @@ interface ScanResult<TEncoding extends OutputEncoding = "buffer"> {
 }
 ```
 
-### Como `status` é decidido
+Quando `success` é verdadeiro, `data`, `output` e `detection` estão presentes, inclusive para `partial`. Quando `not_found` ocorre, não há artefato e `error` continua `null`. Quando `error` ocorre depois da detecção, o campo `detection` pode preservar o limite encontrado, mas `data` e `output` são nulos.
 
-| Condição                                          | `status`      | `success` |
-| ------------------------------------------------- | ------------- | --------- |
-| Saída produzida com quatro bordas internas        | `"success"`   | `true`    |
-| Saída produzida, mas a detecção toca o quadro     | `"partial"`   | `true`    |
-| Quadro inteiro preservado como fallback           | `"partial"`   | `true`    |
-| Detecção completa sem quadrilátero aceito         | `"not_found"` | `false`   |
-| Falha de entrada, opção, recurso ou processamento | `"error"`     | `false`   |
+### `ScanOutputInfo`
 
-`partial` é saída utilizável com uma ressalva geométrica; examine `warnings` e
-decida se o documento precisa de revisão. `not_found` é uma conclusão normal,
-sem `error`.
+| Campo             | Significado                                                        |
+| ----------------- | ------------------------------------------------------------------ |
+| `format`          | Contêiner solicitado.                                              |
+| `encoding`        | Representação solicitada.                                          |
+| `mimeType`        | `image/png`, `image/jpeg`, `image/webp` ou `application/pdf`.      |
+| `byteLength`      | Tamanho binário codificado.                                        |
+| `width`, `height` | Dimensões do raster corrigido, inclusive quando o contêiner é PDF. |
 
-Se a correção ou codificação falhar depois da detecção, o resultado de erro pode
-preservar `confidence`, `detection` e os avisos já conhecidos, mas `data` e
-`output` voltam `null`.
+## Status e avisos
 
-### `data` e `ScanOutputInfo`
+| Status      | Detecção/saída                 | Condição                                                                                       |
+| ----------- | ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `success`   | presente                       | Limite aceito que não toca quadro e, se automático, alcança `minSuccessAreaRatio`.             |
+| `partial`   | presente                       | Método `frame`, canto junto ao quadro ou candidato automático abaixo de `minSuccessAreaRatio`. |
+| `not_found` | ausente                        | Nenhum candidato passou e o fallback não se aplicou/estava desativado.                         |
+| `error`     | ausente ou detecção preservada | Uma fase terminou com falha categorizada.                                                      |
 
-```ts
-type EncodedScanData<TEncoding extends OutputEncoding> = TEncoding extends "buffer" ? Buffer : string;
-
-interface ScanOutputInfo<TEncoding extends OutputEncoding> {
-  format: OutputFormat;
-  encoding: TEncoding;
-  mimeType: string;
-  byteLength: number;
-  width: number;
-  height: number;
-}
-```
-
-`byteLength` mede os bytes codificados antes de Base64 ou Data URL. `width` e
-`height` são as dimensões do raster corrigido, inclusive quando o contêiner é
-PDF.
-
-`data` contém o documento digitalizado completo e pode conter informação
-sensível. Não registre o resultado inteiro em logs sem remover esse campo.
-
----
-
-## Resultado de detecção
-
-```ts
-interface DetectionResult {
-  status: ScanStatus;
-  success: boolean;
-  detection: DocumentDetection | null;
-  metadata: DetectionMetadata;
-  warnings: string[];
-  error: ScanErrorInfo | null;
-}
-```
-
-As mesmas regras de `status` se aplicam, mas `success` indica a presença de um
-quadrilátero, não de bytes codificados. Não existem `data`, `output` nem campos
-de transformação.
-
----
-
-## Detecção
-
-### `DocumentDetection`
-
-| Campo                 | Significado                                                  |
-| --------------------- | ------------------------------------------------------------ |
-| `corners`             | Cantos em pixels da imagem de origem orientada por EXIF      |
-| `confidence`          | Escore de `0` a `1`, com semântica dependente do método      |
-| `method`              | `contour`, `lines`, `frame` ou `manual`                      |
-| `areaRatio`           | Fração da imagem encerrada pelo quadrilátero                 |
-| `edgeSupport`         | Fração de amostras da borda sustentada pelos mapas de aresta |
-| `touchesFrame`        | Indica que ao menos um canto está próximo da margem          |
-| `candidatesEvaluated` | Quantidade de quadriláteros examinados antes da seleção      |
-
-Métodos:
-
-- `contour`: quadrilátero aproximado a partir de contornos fechados;
-- `lines`: interseção de linhas externas detectadas;
-- `frame`: imagem inteira preservada como fallback parcial;
-- `manual`: cantos fornecidos pelo chamador.
-
-Para `contour` e `lines`, o escore combina área, suporte de borda, contraste,
-ângulos, paralelismo, centralidade e proporção. Em `frame`, combina brilho,
-distribuição de pixels escuros e aparência de página; em `manual`, vale `1`
-porque os pontos vieram do chamador. É uma heurística determinística, **não**
-uma probabilidade calibrada nem uma medida uniforme entre métodos. O contrato
-atual não publica uma versão de confiança; valide método e limiar em fotografias
-representativas antes de automatizar rejeições.
-
-`allowFrameFallback: false` desliga somente o método `frame`. Um contorno,
-detecção por linhas ou quadrilátero manual que toque a margem continua podendo
-retornar `partial`.
-
----
+Além de condições `partial`, um candidato automático que passa `minConfidence` por margem inferior a 0,08 recebe aviso para revisão, sem mudar obrigatoriamente o status.
 
 ## Metadados
 
-### `DetectionMetadata`
+### Campos comuns
 
-| Campo             | Significado                                              |
-| ----------------- | -------------------------------------------------------- |
-| `performance`     | Perfil resolvido                                         |
-| `inputFormat?`    | `jpeg`, `png`, `webp`, `tiff`, `avif` ou `heif`          |
-| `fileSizeBytes`   | Tamanho carregado; zero quando a inspeção não completou  |
-| `sourceWidth`     | Largura da imagem orientada; zero em erro precoce        |
-| `sourceHeight`    | Altura da imagem orientada; zero em erro precoce         |
-| `detectionWidth`  | Largura do raster de análise ou da origem no modo manual |
-| `detectionHeight` | Altura do raster de análise ou da origem no modo manual  |
-| `durationMs`      | Tempo total decorrido                                    |
-| `complete`        | `true` somente em `success` ou `not_found`               |
+| Campo                               | Significado                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------ |
+| `performance`                       | Perfil resolvido. Em erro de opções, cai para `balanced`.                |
+| `inputFormat`                       | Formato detectado quando a inspeção foi concluída.                       |
+| `fileSizeBytes`                     | Tamanho carregado; zero quando não existe contexto completo.             |
+| `sourceWidth`, `sourceHeight`       | Dimensões orientadas por EXIF.                                           |
+| `detectionWidth`, `detectionHeight` | Raster automático reduzido ou dimensões da origem para cantos manuais.   |
+| `durationMs`                        | Duração total monotônica.                                                |
+| `complete`                          | Falso para `partial` e `error`; verdadeiro para `success` e `not_found`. |
 
-`inputFormat` é omitido quando a falha acontece antes de uma inspeção completa.
+### Campos adicionais de `ScanMetadata`
 
-### `ScanMetadata`
+| Campo                         | Significado                                                          |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `outputWidth`, `outputHeight` | Dimensões do raster ou zero sem saída.                               |
+| `paperSize`                   | Política resolvida/solicitada.                                       |
+| `enhancement`                 | Realce resolvido.                                                    |
+| `loadDurationMs`              | Carregamento e inspeção.                                             |
+| `detectionDurationMs`         | Detecção automática; zero para cantos manuais ou fase não concluída. |
+| `transformDurationMs`         | Decodificação regional e homografia.                                 |
+| `encodeDurationMs`            | Realce e codificação.                                                |
 
-Além dos campos de detecção:
+## Códigos de erro
 
-| Campo                 | Significado                                                 |
-| --------------------- | ----------------------------------------------------------- |
-| `outputWidth`         | Largura corrigida, ou zero sem saída                        |
-| `outputHeight`        | Altura corrigida, ou zero sem saída                         |
-| `paperSize`           | Papel resolvido; sem saída, modo solicitado ou fallback     |
-| `enhancement`         | Realce resolvido                                            |
-| `loadDurationMs`      | Carregamento e inspeção                                     |
-| `detectionDurationMs` | Busca automática; zero em cantos manuais ou fase incompleta |
-| `transformDurationMs` | Decodificação da região e correção de perspectiva           |
-| `encodeDurationMs`    | Realce e codificação da saída                               |
+| Código               | Origem típica                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------- |
+| `INVALID_INPUT`      | Tipo vazio/inválido, caminho que não é arquivo, esquema remoto proibido ou leitura local genérica. |
+| `FILE_NOT_FOUND`     | Caminho local inexistente.                                                                         |
+| `FILE_TOO_LARGE`     | Bytes excedem `maxFileSizeBytes`, por metadado HTTP ou leitura real.                               |
+| `DOWNLOAD_ERROR`     | Fetch, redirect, status HTTP, corpo ou leitura remota falhou.                                      |
+| `INVALID_OPTIONS`    | Tipo, enum, faixa, headers, sinal ou cantos não cumprem o contrato.                                |
+| `UNSUPPORTED_FORMAT` | Assinatura não suportada, animação ou imagem multipágina.                                          |
+| `INVALID_IMAGE`      | Metadados ou raster não podem ser decodificados com segurança.                                     |
+| `TIMEOUT`            | Deadline configurado foi alcançado.                                                                |
+| `ABORTED`            | `AbortSignal` do chamador foi acionado.                                                            |
+| `RESOURCE_LIMIT`     | Eixo/pixels excedidos, `RangeError` ou limite de dimensão/memória.                                 |
+| `PROCESSING_ERROR`   | Falha inesperada de OpenCV, transformação, realce ou codificação.                                  |
 
-Zero significa que a duração da fase não foi registrada, não necessariamente
-que nenhum trabalho ocorreu. Por exemplo, se a codificação falhar depois do
-warp, o resultado de erro volta com `transformDurationMs: 0`. `durationMs` mede
-a operação inteira e pode ser maior que a soma dos campos individuais.
+Mensagens são próprias para exibição/log operacional, mas não incluem a exceção original. Não dependa do texto para automação; use `error.code`.
 
----
+## Ciclo de vida do runtime
 
-## Erros
+### `warmupScanner`
 
 ```ts
-interface ScanErrorInfo {
-  code: ScanErrorCode;
-  message: string;
-}
+function warmupScanner(): Promise<void>;
 ```
 
-| Código               | Quando ocorre                                                   |
-| -------------------- | --------------------------------------------------------------- |
-| `INVALID_INPUT`      | Tipo, caminho, URL ou conteúdo de entrada inválido              |
-| `FILE_NOT_FOUND`     | Caminho local inexistente                                       |
-| `FILE_TOO_LARGE`     | Excede `maxFileSizeBytes`, declarado ou recebido                |
-| `DOWNLOAD_ERROR`     | Falha de rede, HTTP, corpo ou redirecionamento                  |
-| `INVALID_OPTIONS`    | Opção, cabeçalho, sinal ou canto fora do contrato               |
-| `UNSUPPORTED_FORMAT` | Assinatura não suportada ou imagem animada/multipágina          |
-| `INVALID_IMAGE`      | Metadados ou raster não puderam ser decodificados com segurança |
-| `TIMEOUT`            | `timeoutMs` esgotado                                            |
-| `ABORTED`            | `signal` disparado                                              |
-| `RESOURCE_LIMIT`     | Limite de pixels, eixo, memória ou dimensão atingido            |
-| `PROCESSING_ERROR`   | Falha inesperada convertida em resultado estruturado            |
+Inicializa antecipadamente o runtime OpenCV compartilhado. Diferente de `scanDocument` e `detectDocument`, essa função não transforma falha em resultado estruturado; sua Promise pode rejeitar se o runtime não carregar.
 
-Mensagens estruturadas não reproduzem URL, consulta, caminho, cabeçalhos,
-bytes de entrada nem exceções internas. Isso não torna `ScanResult` inteiro
-apropriado para logs: em caso de sucesso, `data` contém a saída digitalizada.
+Use-a no startup quando a latência da primeira digitalização não puder incluir o cold start:
 
----
+```js
+await warmupScanner();
+```
 
-## Documentos remotos
+### `releaseScannerResources`
 
-Somente URLs `http://` e `https://`, sem usuário ou senha embutidos. O download
-segue respostas 301, 302, 303, 307 e 308, com no máximo cinco
-redirecionamentos.
+```ts
+function releaseScannerResources(): void;
+```
 
-Redirecionamentos de mesma origem preservam `requestHeaders`. Quando a origem
-muda — ou há rebaixamento de HTTPS para HTTP — todos os cabeçalhos do chamador
-são removidos antes da próxima solicitação. `accept-encoding` é fixado como
-`identity` pelo pacote.
+Limpa o cache de operações do `sharp` ao fim de um lote e restaura os limites anteriores do cache. O cache é global a todos os usos de `sharp` no processo. O heap WebAssembly do OpenCV permanece alocado e scans posteriores continuam funcionando.
 
-`maxFileSizeBytes` é aplicado ao `Content-Length` válido e aos bytes recebidos.
-`timeoutMs` e `signal` governam a operação inteira de forma cooperativa. Download
-e leitura local recebem um sinal abortável; fases de Sharp, OpenCV.js, PDF e
-representação textual que não aceitam esse sinal só são verificadas entre pontos
-de controle. Portanto, o prazo não é um teto rígido de tempo de parede. Falhas
-usam `DOWNLOAD_ERROR`, `FILE_TOO_LARGE`, `TIMEOUT` ou `ABORTED`, conforme a
-causa.
-
-> **O pacote não é um filtro de SSRF.** A URL e seus redirecionamentos podem
-> alcançar qualquer endereço acessível ao processo. Quando forem necessárias
-> regras de host, DNS/IP ou redirecionamento, faça o download com um cliente
-> controlado pela aplicação e entregue os bytes ao Scanner.
-
----
-
-## Imagens, limites e segurança
-
-Antes da decodificação completa, o pacote valida assinatura, tamanho,
-metadados, orientação, número de páginas, largura, altura e área declarada.
-Cada eixo da imagem orientada é limitado a 32.767 pixels, além de
-`maxInputPixels`.
-
-A detecção automática usa uma cópia reduzida até `detectionMaxDimension`. Para a
-correção, somente a região em torno dos cantos é decodificada, e ela pode ser
-reduzida conforme o orçamento de saída. `maxOutputPixels` limita o raster final.
-
-Não há interface de streaming. Arquivo, resposta HTTP, rasters intermediários e
-saída codificada são materializados em memória; Base64 e Data URL criam ainda
-uma representação textual. Os limites são aplicados por chamada e não somam o
-consumo de execuções concorrentes. Controle a concorrência na aplicação,
-especialmente ao elevar os tetos máximos de bytes e pixels.
-
-- Execução somente por CPU; nenhum backend de GPU é usado.
-- A rede serve apenas ao download da entrada. Detecção, correção e codificação
-  são locais.
-- Não há OCR, extração de texto, camada PDF pesquisável ou interpretação do
-  documento.
-- Não há cache próprio nem persistência automática em disco.
-- A memória é devolvida ao coletor de lixo sem garantia de sobrescrita segura
-  dos buffers depois do uso.
-- Imagens animadas ou multipágina são recusadas.
-- PDF, SVG, GIF e vídeo não são entradas aceitas.
-- Fotos cortadas, escuras, desfocadas, com reflexo ou sem contraste suficiente
-  podem terminar legitimamente em `not_found` ou `partial`.
-
-O Scanner só avalia geometria visual. Uma saída `success` não comprova que todo
-o conteúdo está legível, que o documento é autêntico ou que a fotografia não
-perdeu informação fora da folha detectada.
+```js
+try {
+  await warmupScanner();
+  // processar o lote
+} finally {
+  releaseScannerResources();
+}
+```

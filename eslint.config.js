@@ -2,7 +2,7 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 /**
- * Configures linting for TypeScript sources, benchmarks, and tests.
+ * Configures linting for TypeScript sources and benchmarks.
  */
 export default tseslint.config(
   {
@@ -24,7 +24,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["bench/**/*.mjs", "test/**/*.mjs"],
+    files: ["bench/**/*.mjs"],
     languageOptions: {
       globals: {
         AbortController: "readonly",

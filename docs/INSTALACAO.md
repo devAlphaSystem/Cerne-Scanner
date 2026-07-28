@@ -2,148 +2,143 @@
 
 ## Requisitos
 
-| Item              | Exigência                                                       |
-| ----------------- | --------------------------------------------------------------- |
-| Node.js           | 20.9 ou superior; a CI cobre as linhas 20, 22 e 24              |
-| Sistema           | Binário do `sharp` ou instalação global compatível do `libvips` |
-| OpenCV do sistema | Não precisa estar instalado; o pacote usa OpenCV.js             |
-| GPU               | Não é usada                                                     |
-| Credenciais       | Nenhuma chave de API é exigida pelo pacote                      |
-| Rede em execução  | Usada apenas se a entrada for uma URL HTTP/HTTPS                |
+- Node.js 20 ou superior, conforme `engines` do pacote.
+- Uma plataforma suportada pelo binário opcional do `sharp` instalado pelo gerenciador de pacotes.
+- Memória compatível com o perfil e o limite de pixels de saída escolhidos.
 
-O processamento é local. `@opencvjs/node` inicializa o runtime OpenCV.js
-empacotado, e `sharp` fornece a leitura e a codificação de imagens. Não existe
-download de modelo, uso de CDN ou chamada a serviço de processamento.
+O CI atual executa verificação em Node.js 20, 22 e 24 sobre Ubuntu. A versão instalada de `sharp` declara Node.js `>=20.9.0`; na linha 20, use uma versão de patch atual em vez de uma versão inicial do Node 20.
 
-## Instalação como dependência
+O projeto não lê `.env` nem `process.env`, não exige banco de dados, serviço externo, OpenCV do sistema ou porta de rede. O OpenCV usado pelo scanner vem de `@opencvjs/node`; o processamento raster usa `sharp`/libvips.
+
+## Como dependência
 
 ```bash
 npm install cerne-scanner
 ```
 
-O pacote publica ESM e CommonJS com declarações de tipos para ambos:
+ESM:
 
-```ts
+```js
 import { scanDocument } from "cerne-scanner";
 ```
+
+CommonJS:
 
 ```js
 const { scanDocument } = require("cerne-scanner");
 ```
 
-O `package.json` declara `"sideEffects": false`, então bundlers podem eliminar
-código não utilizado. O pacote atualmente declara `engines.node` como `>=20`,
-mas a versão de `sharp` resolvida no lockfile exige `>=20.9.0`; esse é o mínimo
-efetivo da árvore atual. A API depende de recursos do Node.js e é destinada a
-processos Node, não diretamente ao navegador.
+O manifesto direciona cada forma para seu artefato correspondente:
 
-## Instalação da CLI
+| Consumidor       | JavaScript       | Tipos              |
+| ---------------- | ---------------- | ------------------ |
+| ESM/import       | `dist/index.js`  | `dist/index.d.ts`  |
+| CommonJS/require | `dist/index.cjs` | `dist/index.d.cts` |
 
-O pacote registra o binário `cerne-scanner`. Depois de instalar como dependência
-do projeto:
+O pacote é marcado com `sideEffects: false`. A importação, por si só, não inicializa o OpenCV; ele é carregado na primeira detecção/transformação ou por `warmupScanner()`.
 
-```bash
-npx cerne-scanner ./foto.jpg --output ./scan.png --pretty
-```
-
-Para uso global:
+## CLI global
 
 ```bash
 npm install --global cerne-scanner
+cerne-scanner --help --pretty
 ```
 
-A CLI só grava uma saída binária quando `--output` é informado. Também é
-possível devolver Base64 ou Data URL no JSON. Detalhes em [CLI.md](CLI.md).
+O binário publicado aponta para `dist/cli.js`. A ajuda é um descritor JSON e não texto livre. Veja [CLI.md](CLI.md).
 
-## Dependências instaladas
+## Checkout de desenvolvimento
 
-| Pacote           | Papel                                                           |
-| ---------------- | --------------------------------------------------------------- |
-| `@opencvjs/node` | Detecção geométrica, refinamento e correção de perspectiva      |
-| `sharp`          | Metadados, orientação EXIF, decodificação, realce e codificação |
-| `pdf-lib`        | Criação da saída PDF de uma página a partir do raster           |
-
-`sharp` distribui binários e o `libvips` para as plataformas suportadas. Em um
-sistema sem artefato compatível, a instalação pode exigir ambiente de
-compilação ou falhar; o Cerne Scanner não oferece um decodificador alternativo.
-
-Os binários pré-compilados comuns cobrem JPEG, PNG, WebP, TIFF e AVIF, mas HEIC
-baseado em HEVC exige um `libvips` global compilado com `libheif`, `libde265` e
-os codecs correspondentes. Sem esse suporte, a assinatura HEIF é reconhecida,
-mas a inspeção retorna `INVALID_IMAGE`. Consulte a
-[documentação de HEIF do `sharp`](https://sharp.pixelplumbing.com/api-output/#heif).
-
-O OpenCV.js é carregado de forma assíncrona na primeira detecção automática ou
-correção de perspectiva e reutilizado dentro do processo. Uma chamada de
-`detectDocument` com `manualCorners` apenas valida a imagem e os pontos. Para
-retirar a latência do primeiro trabalho visual, chame `warmupScanner()` durante
-a inicialização da aplicação.
-
-## Desenvolvimento local
+O repositório mantém `package-lock.json`; a instalação reproduzível prevista pelo CI é:
 
 ```bash
-git clone <repositorio>
-cd "Cerne Scanner"
-npm install
-npm run build
+npm ci
 ```
 
-O `postinstall` executa `patch-package`, que aplica
-`patches/prettier+3.9.4.patch`. Instalações com `--ignore-scripts` pulam essa
-etapa e o `npm run format:check` pode divergir do resultado esperado.
+Scripts declarados em `package.json`:
 
-### Scripts disponíveis
+| Script                   | Função                                                             |
+| ------------------------ | ------------------------------------------------------------------ |
+| `npm run build`          | Gera biblioteca ESM/CommonJS, tipos, source maps e CLI com `tsup`. |
+| `npm run typecheck`      | Executa TypeScript sem emitir arquivos.                            |
+| `npm run lint`           | Executa ESLint.                                                    |
+| `npm run format`         | Reescreve arquivos com Prettier.                                   |
+| `npm run format:check`   | Confere formatação sem reescrever.                                 |
+| `npm run check`          | Typecheck, lint, formatação e build.                               |
+| `npm run bench:fixtures` | Gera as imagens sintéticas locais do benchmark.                    |
+| `npm run bench`          | Mede casos do benchmark com GC exposto.                            |
+| `npm run security:audit` | Executa auditoria de dependências com severidade mínima `low`.     |
+| `npm run prepack`        | Executa `check` antes de empacotar.                                |
+| `npm run prepare`        | Reaplica o patch local do Prettier via `patch-package`.            |
 
-| Script                   | O que faz                                                      |
-| ------------------------ | -------------------------------------------------------------- |
-| `npm run build`          | Gera ESM, CJS, `.d.ts`, sourcemaps e a CLI em `dist/` via tsup |
-| `npm run typecheck`      | `tsc --noEmit`                                                 |
-| `npm run lint`           | ESLint com `typescript-eslint`                                 |
-| `npm run format`         | Aplica o Prettier                                              |
-| `npm run format:check`   | Verifica a formatação sem escrever                             |
-| `npm test`               | `node --test`                                                  |
-| `npm run bench:fixtures` | Regenera as fixtures sintéticas em `bench/fixtures/`           |
-| `npm run bench`          | Executa os casos e mede o tempo; flags habilitam a comparação  |
-| `npm run security:audit` | `npm audit --audit-level=low`                                  |
-| `npm run check`          | typecheck + lint + format:check + build + test, na ordem       |
+Não há script de servidor, watcher ou teste unitário no manifesto atual. O CI verifica tipos, lint, formatação e build; o benchmark sintético é a verificação de regressão funcional e de desempenho disponível no repositório, mas não aparece no workflow de CI atual.
 
-### Verificação de uma alteração
+### Patch do Prettier
 
-O repositório não versiona arquivos de teste: `npm test` hoje executa zero
-testes e termina com sucesso de forma vacuosa. A verificação funcional vem do
-benchmark, cujas fixtures são sintéticas e determinísticas:
+`patches/prettier+3.9.4.patch` modifica o formatador usado no desenvolvimento. Por isso:
 
-```bash
-npm run bench:fixtures
-npm run build && node bench/run.mjs --repeats 3 --save antes
+- a versão do Prettier está fixada em `3.9.4`;
+- `prepare` usa `patch-package` depois da instalação;
+- atualizar Prettier exige regenerar e revisar esse patch;
+- o patch não altera a execução do scanner nem integra o conteúdo publicado em `dist`.
+
+As instruções completas de manutenção estão no cabeçalho do próprio arquivo de patch. Não edite os arquivos minificados dentro de `node_modules` como solução permanente.
+
+## Artefatos de build e publicação
+
+O build esperado gera:
+
+```text
+dist/
+  index.js
+  index.cjs
+  index.d.ts
+  index.d.cts
+  index.js.map
+  index.cjs.map
+  cli.js
+  cli.js.map
 ```
 
-Depois de alterar `src/`:
+`dist` é ignorado pelo Git deste repositório, mas é incluído no pacote publicado. A lista `files` do manifesto inclui:
 
-```bash
-npm run build && node bench/run.mjs --repeats 3 --compare antes
+- `dist`;
+- `README.md`;
+- `LICENSE`.
+
+Os guias em `docs/` e os arquivos de benchmark permanecem no repositório, mas não são incluídos no pacote npm.
+
+Compile a partir de `src`; não mantenha correções paralelas diretamente nos artefatos gerados.
+
+## CI
+
+`.github/workflows/ci.yml` possui dois jobs:
+
+1. `verify`, em Node.js 20, 22 e 24: instalação limpa, typecheck, lint, formatação e build;
+2. `security`, em Node.js 22: instalação limpa e auditoria de dependências.
+
+O workflow usa permissões `contents: read` e é acionado em `push` e `pull_request`.
+
+## Verificação após instalação
+
+Um smoke test útil é aquecer o runtime antes de ler dados de produção:
+
+```js
+import { warmupScanner } from "cerne-scanner";
+
+await warmupScanner();
+console.log("OpenCV carregado");
 ```
 
-A comparação ignora os cinco campos de duração e confronta detecção, confiança,
-saída, avisos, erro, metadados e o SHA-256 de `data`, seja binário ou a
-representação textual solicitada. Para PDF, cujo arquivo carrega data de
-criação, o digest e `byteLength` são ignorados; as dimensões e o papel declarados
-no resultado, além do restante do contrato, continuam sendo comparados. O
-benchmark não reabre o PDF para validar seu conteúdo. Uma divergência em um caso
-presente nas duas execuções faz o processo sair com código `1`. Consulte
-[`bench/README.md`](../bench/README.md).
+`warmupScanner()` pode rejeitar a Promise quando o runtime não carrega, o que facilita detectar uma instalação incompleta no startup. Para validar o pipeline completo, use uma imagem controlada e confira `status`, `error`, `metadata.inputFormat` e `output.mimeType`.
 
-### Integração contínua
+## Problemas de plataforma
 
-`.github/workflows/ci.yml` roda `typecheck`, `lint`, `format:check`, `build` e
-`test` na matriz Node 20/22/24. O `security:audit` roda em um job separado.
+Se a importação ou codificação falhar:
 
-## Desinstalação
+1. confirme a versão exata de Node.js;
+2. confirme que dependências opcionais não foram omitidas na instalação, pois `sharp` seleciona um pacote por plataforma;
+3. reinstale as dependências com o lockfile correto para o sistema de destino;
+4. execute `warmupScanner()` separadamente para distinguir inicialização do OpenCV de leitura/codificação;
+5. confira `error.code` e `metadata` em uma imagem controlada para distinguir falha de entrada, inicialização, detecção ou codificação.
 
-```bash
-npm uninstall cerne-scanner
-```
-
-A biblioteca não cria cache nem persiste imagens por conta própria. Arquivos
-gravados explicitamente pela CLI com `--output` pertencem à aplicação e não são
-removidos na desinstalação.
+Em contêineres, faça a instalação no mesmo sistema/arquitetura da imagem final ou em estágio compatível. Não copie um `node_modules` produzido para outro sistema operacional ou arquitetura.

@@ -31,16 +31,53 @@ function failureInfo(error: unknown): ScanErrorInfo {
   return { code: "PROCESSING_ERROR", message: "The image could not be scanned because an unexpected processing error occurred." };
 }
 
-function statusForDetection(detection: DocumentDetection | null): ScanStatus {
-  if (detection === null) return "not_found";
-  return detection.touchesFrame || detection.method === "frame" ? "partial" : "success";
+/**
+ * Reports whether a boundary came from automatic ranking rather than from the caller or the whole frame.
+ *
+ * Only ranked boundaries can select the wrong quadrilateral, so the area reservation and the narrow-margin
+ * reservation apply to them alone: manual corners are the caller's own geometry and the frame fallback
+ * already reports itself as partial.
+ *
+ * @param {DocumentDetection["method"]} method - The strategy that supplied the boundary.
+ * @returns {boolean} `true` when the boundary was ranked by contour or line analysis.
+ */
+function isRankedMethod(method: DocumentDetection["method"]): boolean {
+  return method === "contour" || method === "lines";
 }
 
-function detectionWarnings(detection: DocumentDetection | null): string[] {
+/**
+ * Reports whether a ranked boundary encloses too little of the image to be trusted as the page outline.
+ *
+ * @param {DocumentDetection} detection - The selected boundary.
+ * @param {number} minSuccessAreaRatio - The smallest accepted image share.
+ * @returns {boolean} `true` when the boundary is ranked and smaller than the accepted share.
+ */
+function enclosesTooLittle(detection: DocumentDetection, minSuccessAreaRatio: number): boolean {
+  return isRankedMethod(detection.method) && detection.areaRatio < minSuccessAreaRatio;
+}
+
+function statusForDetection(detection: DocumentDetection | null, minSuccessAreaRatio: number): ScanStatus {
+  if (detection === null) return "not_found";
+  if (detection.touchesFrame || detection.method === "frame") return "partial";
+  return enclosesTooLittle(detection, minSuccessAreaRatio) ? "partial" : "success";
+}
+
+/**
+ * Sets how far above `minConfidence` a contour must score before it is reported without a reservation.
+ *
+ * Contours that clear the threshold by less than this margin are frequently rectangles drawn inside the
+ * page — tables, boxed sections, photographs — rather than the page boundary itself, because the score in
+ * `detectCorners` rewards straight high-contrast edges without requiring that they enclose the whole sheet.
+ */
+const MARGINAL_CONFIDENCE_MARGIN = 0.08;
+
+function detectionWarnings(detection: DocumentDetection | null, options: ResolvedOptions): string[] {
   if (detection === null) return [];
   const warnings: string[] = [];
   if (detection.method === "frame") warnings.push("Four external page edges could not be proven; the complete image frame was preserved as a partial document.");
   else if (detection.touchesFrame) warnings.push("The detected document touches the image boundary, so content outside the photograph cannot be recovered.");
+  else if (enclosesTooLittle(detection, options.minSuccessAreaRatio)) warnings.push(`The detected boundary encloses ${(detection.areaRatio * 100).toFixed(1)}% of the image, below the ${(options.minSuccessAreaRatio * 100).toFixed(1)}% required for an unreserved result, so it may be a region inside the page instead of the page boundary; the crop is reported as partial and the original must be kept.`);
+  else if (isRankedMethod(detection.method) && detection.confidence < options.minConfidence + MARGINAL_CONFIDENCE_MARGIN) warnings.push("The detected contour cleared minConfidence by a narrow margin, so it may enclose a region inside the page instead of the page boundary; verify the crop before discarding the original.");
   return warnings;
 }
 
@@ -71,8 +108,8 @@ async function prepareDetection(input: ScanInput, options: ResolvedOptions, guar
       touchesFrame: touchesImageFrame(corners, imageInfo.width, imageInfo.height),
       candidatesEvaluated: 0,
     };
-    const status = statusForDetection(detection);
-    return { options, loaded, imageInfo, detectionWidth: imageInfo.width, detectionHeight: imageInfo.height, detection, detectionDurationMs: 0, loadDurationMs, warnings: detectionWarnings(detection), status };
+    const status = statusForDetection(detection, options.minSuccessAreaRatio);
+    return { options, loaded, imageInfo, detectionWidth: imageInfo.width, detectionHeight: imageInfo.height, detection, detectionDurationMs: 0, loadDurationMs, warnings: detectionWarnings(detection, options), status };
   }
 
   const detectionStarted = startTimer();
@@ -85,8 +122,8 @@ async function prepareDetection(input: ScanInput, options: ResolvedOptions, guar
     const corners = scaleCorners(detection.corners, image.width, image.height, imageInfo.width, imageInfo.height);
     detection = { ...detection, corners, touchesFrame: touchesImageFrame(corners, imageInfo.width, imageInfo.height), candidatesEvaluated: detected.candidatesEvaluated };
   }
-  const status = statusForDetection(detection);
-  return { options, loaded, imageInfo, detectionWidth: image.width, detectionHeight: image.height, detection, detectionDurationMs, loadDurationMs, warnings: detectionWarnings(detection), status };
+  const status = statusForDetection(detection, options.minSuccessAreaRatio);
+  return { options, loaded, imageInfo, detectionWidth: image.width, detectionHeight: image.height, detection, detectionDurationMs, loadDurationMs, warnings: detectionWarnings(detection, options), status };
 }
 
 function detectionMetadata(context: DetectionContext, startedAt: MonotonicTimestamp, complete: boolean): DetectionMetadata {

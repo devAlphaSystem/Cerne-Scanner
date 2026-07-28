@@ -50,6 +50,11 @@ export type PaperSize = "detected" | "auto" | "a4" | "letter";
 /**
  * Identifies the overall outcome of document detection or scanning.
  *
+ * `success` reports only that the selected quadrilateral does not touch the image frame; it is not proof
+ * that the crop covers the whole page. A rectangle enclosed by the page never touches the frame, so a crop
+ * taken from inside the sheet is also reported as `success`. Check `warnings` and `confidence` when a
+ * destructive crop would be unacceptable.
+ *
  * @since 0.1.0
  */
 export type ScanStatus = "success" | "partial" | "not_found" | "error";
@@ -132,6 +137,21 @@ export interface ScanOptions<TEncoding extends OutputEncoding = OutputEncoding> 
   minConfidence?: number;
   /** Sets the minimum document-to-image area ratio for automatic detection from 0.02 through 0.95, defaulting to 0.12. */
   minDocumentAreaRatio?: number;
+  /**
+   * Sets the smallest share of the image an automatically detected boundary must enclose to be reported as
+   * `success` instead of `partial`, from zero through 0.95 and defaulting to 0.20.
+   *
+   * The boundary score rewards straight, high-contrast, right-angled edges without requiring that they enclose
+   * the whole sheet, so a table or a framed section printed inside the page can outrank the page outline and
+   * still clear `minConfidence`. Confidence alone does not separate the two cases; the enclosed area does.
+   * Boundaries below this share still produce output, but the `partial` status marks the crop as unverified so
+   * an automated pipeline does not discard the original.
+   *
+   * The default is calibrated against observed regressions rather than a labelled corpus: measured internal
+   * regions enclosed about 0.14 of the image and the smallest correct page about 0.25. Raise it when losing a
+   * distant page is cheaper than accepting a wrong crop, and set it to zero to restore the previous behaviour.
+   */
+  minSuccessAreaRatio?: number;
   /** Expands selected corners before scan output transformation by a ratio from zero through 0.05, defaulting to 0.003; it has no effect in `detectDocument`. */
   paddingRatio?: number;
   /** Allows the full image frame to serve as a partial document fallback, defaulting to `true`. */
@@ -142,7 +162,7 @@ export interface ScanOptions<TEncoding extends OutputEncoding = OutputEncoding> 
   maxFileSizeBytes?: number;
   /** Limits the validated EXIF-oriented source-image area before raster decoding from 250,000 through 250 million pixels, defaulting to 60, 100, or 160 million by profile. */
   maxInputPixels?: number;
-  /** Limits corrected output-image area from 250,000 through 100 million pixels, defaulting to 20, 32, or 50 million by profile. */
+  /** Limits corrected output-image area from 250,000 through 100 million pixels, defaulting to 4, 8, or 16 million by profile. */
   maxOutputPixels?: number;
   /** Sets the deadline from zero through 3,600,000 milliseconds, defaulting to 20, 60, or 120 seconds by profile; zero disables it. */
   timeoutMs?: number;

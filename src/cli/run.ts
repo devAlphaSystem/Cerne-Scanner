@@ -32,6 +32,7 @@ const HELP = {
     { name: "--paper-size", value: "detected|auto|a4|letter", description: "Controla a proporção final." },
     { name: "--quality", value: "1..100", description: "Controla qualidade JPEG/WebP e raster do PDF." },
     { name: "--min-confidence", value: "0..1", description: "Define a confiança mínima para correção automática." },
+    { name: "--min-success-area", value: "0..0.95", description: "Define a fração mínima da imagem para um recorte automático ser reportado como success em vez de partial." },
     { name: "--padding", value: "0..0.05", description: "Expande o quadrilátero antes do recorte." },
     { name: "--corners", value: "x,y;x,y;x,y;x,y", description: "Usa cantos manuais na ordem TL,TR,BR,BL da imagem orientada." },
     { name: "--detection-size", value: "320..4096", description: "Sobrescreve o maior eixo usado na análise." },
@@ -101,6 +102,7 @@ function parseArguments(args: string[]): ParsedArguments {
   let paperSize: PaperSize | undefined;
   let quality: number | undefined;
   let minConfidence: number | undefined;
+  let minSuccessAreaRatio: number | undefined;
   let paddingRatio: number | undefined;
   let manualCorners: DocumentCorners | undefined;
   let detectionMaxDimension: number | undefined;
@@ -130,6 +132,7 @@ function parseArguments(args: string[]): ParsedArguments {
     else if (argument === "--paper-size") paperSize = enumValue(argument, optionValue(args, index++, argument), ["detected", "auto", "a4", "letter"] as const);
     else if (argument === "--quality") quality = numericValue(argument, optionValue(args, index++, argument));
     else if (argument === "--min-confidence") minConfidence = numericValue(argument, optionValue(args, index++, argument));
+    else if (argument === "--min-success-area") minSuccessAreaRatio = numericValue(argument, optionValue(args, index++, argument));
     else if (argument === "--padding") paddingRatio = numericValue(argument, optionValue(args, index++, argument));
     else if (argument === "--corners") manualCorners = parseCorners(optionValue(args, index++, argument));
     else if (argument === "--detection-size") detectionMaxDimension = numericValue(argument, optionValue(args, index++, argument));
@@ -158,6 +161,7 @@ function parseArguments(args: string[]): ParsedArguments {
       ...(enhancement === undefined ? {} : { enhancement }),
       ...(paperSize === undefined ? {} : { paperSize }),
       ...(minConfidence === undefined ? {} : { minConfidence }),
+      ...(minSuccessAreaRatio === undefined ? {} : { minSuccessAreaRatio }),
       ...(paddingRatio === undefined ? {} : { paddingRatio }),
       ...(manualCorners === undefined ? {} : { manualCorners }),
       ...(detectionMaxDimension === undefined ? {} : { detectionMaxDimension }),

@@ -1,80 +1,76 @@
-# CLI
+# Referência da CLI
 
-O pacote registra o binário `cerne-scanner`. A saída padrão contém **somente
-JSON**; os bytes binários são gravados no caminho indicado por `--output` ou
-representados como texto por `--encoding`.
+## Visão geral
 
-## Uso
+O binário `cerne-scanner` processa uma imagem por execução. Ele recebe somente caminho local ou URL HTTP(S), não bytes em memória, e exige uma destas formas de saída:
+
+- `--output <arquivo>` para gravar bytes;
+- `--encoding base64` ou `--encoding data-url` para incluir texto no JSON do `stdout`.
+
+Bytes binários nunca são enviados ao `stdout`. Assim, logs e automações podem tratar toda resposta da CLI como JSON.
+
+## Sintaxe
 
 ```text
-cerne-scanner <imagem-ou-url> (--output <arquivo> | --encoding base64|data-url) [opções]
+cerne-scanner <imagem-ou-url> (--output <arquivo> | --encoding base64|data-url) [opcoes]
 ```
 
-Exatamente **uma** fonte por execução e exatamente **uma** forma de entrega:
-
-- `--output <arquivo>` grava PNG, JPEG, WebP ou PDF;
-- `--encoding base64|data-url` inclui a saída textual no JSON.
-
-As duas opções são mutuamente exclusivas. A CLI não aceita stdin, bytes em
-memória, lote nem modo somente detecção; ela sempre chama `scanDocument` para um
-caminho local ou URL HTTP/HTTPS.
+Exemplos:
 
 ```bash
 cerne-scanner ./foto.jpg --output ./scan.png --pretty
+cerne-scanner ./foto.jpg --output ./scan.pdf --paper-size a4 --enhancement color
+cerne-scanner https://example.com/documento.webp --encoding base64 --format jpeg
 ```
 
-A CLI reconhece assinaturas de JPEG, PNG, WebP, TIFF, AVIF e HEIF. O formato é
-decidido pelos bytes, não pela extensão. PDF é somente saída. HEIC baseado em
-HEVC requer suporte adicional no `libvips`; sem o codec, retorna `INVALID_IMAGE`.
+Use aspas quando caminhos ou URLs contiverem espaços ou caracteres interpretados pelo shell.
+
+## Ajuda
+
+```bash
+cerne-scanner --help --pretty
+```
+
+`--help` imprime um objeto JSON com nome, sintaxe, formatos, opções e exemplos, e retorna código 0. Quando `--help` está presente, os demais argumentos não são processados.
 
 ## Opções
 
-| Opção                     | Valor                                       | Padrão            | Efeito                                             |
-| ------------------------- | ------------------------------------------- | ----------------- | -------------------------------------------------- |
-| `--output <arquivo>`      | caminho                                     | nenhum            | Grava os bytes sem colocá-los no JSON              |
-| `--format <formato>`      | `png`, `jpeg`, `webp`, `pdf`                | extensão ou `png` | Seleciona o contêiner                              |
-| `--encoding <modo>`       | `base64`, `data-url`                        | nenhum            | Devolve os bytes como texto no JSON                |
-| `--performance <perfil>`  | `fast`, `balanced`, `accurate`              | `balanced`        | Seleciona profundidade e limites                   |
-| `--enhancement <modo>`    | `none`, `color`, `grayscale`, `black-white` | `color`           | Aplica realce depois da correção                   |
-| `--paper-size <papel>`    | `detected`, `auto`, `a4`, `letter`          | `detected`        | Controla a proporção final                         |
-| `--quality <n>`           | inteiro `1..100`                            | `92`              | Qualidade JPEG/WebP e raster JPEG do PDF           |
-| `--min-confidence <n>`    | `0..1`                                      | `0.58`            | Confiança mínima da detecção automática            |
-| `--padding <n>`           | `0..0.05`                                   | `0.003`           | Expande os cantos antes do recorte                 |
-| `--corners <pontos>`      | `x,y;x,y;x,y;x,y`                           | automático        | Usa TL, TR, BR e BL da imagem orientada            |
-| `--detection-size <n>`    | inteiro `320..4096`                         | do perfil         | Limita o maior eixo do raster de análise           |
-| `--max-file-size <bytes>` | inteiro `1..1073741824`                     | `41943040`        | Limita a entrada local ou remota                   |
-| `--max-input-pixels <n>`  | inteiro `250000..250000000`                 | do perfil         | Limita a área da imagem orientada                  |
-| `--max-output-pixels <n>` | inteiro `250000..100000000`                 | do perfil         | Limita a área do raster corrigido                  |
-| `--timeout-ms <n>`        | inteiro `0..3600000`                        | do perfil         | Limita download e processamento; `0` desliga       |
-| `--no-frame-fallback`     | —                                           | desligado         | Impede preservar o quadro inteiro como fallback    |
-| `--force`                 | —                                           | desligado         | Permite substituir o arquivo de `--output`         |
-| `--pretty`                | —                                           | desligado         | Indenta o JSON com dois espaços                    |
-| `--help`                  | —                                           | —                 | Imprime o descritor de ajuda em JSON e sai com `0` |
+| Opção                 | Valor                                       | Padrão/efeito                                                      |
+| --------------------- | ------------------------------------------- | ------------------------------------------------------------------ |
+| `--output`            | `<arquivo>`                                 | Grava a saída binária; obrigatório quando não há encoding textual. |
+| `--format`            | `png`, `jpeg`, `webp`, `pdf`                | Inferido da extensão conhecida de `--output`; senão `png`.         |
+| `--encoding`          | `base64`, `data-url`                        | Inclui `data` textual no JSON; incompatível com `--output`.        |
+| `--performance`       | `fast`, `balanced`, `accurate`              | `balanced`.                                                        |
+| `--enhancement`       | `none`, `color`, `grayscale`, `black-white` | `color`.                                                           |
+| `--paper-size`        | `detected`, `auto`, `a4`, `letter`          | `detected`.                                                        |
+| `--quality`           | inteiro 1..100                              | 92; JPEG, WebP e raster JPEG do PDF.                               |
+| `--min-confidence`    | número 0..1                                 | 0,58.                                                              |
+| `--min-success-area`  | número 0..0,95                              | 0,20; abaixo disso o candidato automático vira `partial`.          |
+| `--padding`           | número 0..0,05                              | 0,003.                                                             |
+| `--corners`           | `x,y;x,y;x,y;x,y`                           | Cantos TL, TR, BR e BL da imagem orientada por EXIF.               |
+| `--detection-size`    | inteiro 320..4096                           | Padrão do perfil.                                                  |
+| `--max-file-size`     | inteiro em bytes                            | 40 MiB; faixa de 1 byte a 1 GiB.                                   |
+| `--max-input-pixels`  | inteiro                                     | Padrão do perfil; faixa 250.000..250.000.000.                      |
+| `--max-output-pixels` | inteiro                                     | Padrão do perfil; faixa 250.000..100.000.000.                      |
+| `--timeout-ms`        | inteiro 0..3600000                          | Padrão do perfil; zero desativa deadline.                          |
+| `--no-frame-fallback` | sem valor                                   | Define `allowFrameFallback: false`.                                |
+| `--force`             | sem valor                                   | Permite substituir o arquivo de `--output`.                        |
+| `--pretty`            | sem valor                                   | Indenta JSON com dois espaços.                                     |
+| `--help`              | sem valor                                   | Imprime o descritor JSON e encerra com código 0.                   |
 
-Os padrões dependentes do perfil são:
+As faixas são validadas pela mesma camada da API. Um valor numericamente legível, mas fora da faixa ou não inteiro quando exigido, gera um resultado `INVALID_OPTIONS`.
 
-| Perfil     | Detecção | Entrada     | Saída      | Prazo |
-| ---------- | -------- | ----------- | ---------- | ----- |
-| `fast`     | 960 px   | 60 milhões  | 20 milhões | 20 s  |
-| `balanced` | 1.440 px | 100 milhões | 32 milhões | 60 s  |
-| `accurate` | 2.048 px | 160 milhões | 50 milhões | 120 s |
+Opções disponíveis somente na API e não expostas pela CLI:
 
-Valores explícitos prevalecem sobre o perfil. `--min-confidence` e `--padding`
-aceitam frações; qualidade, dimensões, bytes, pixels e prazo precisam ser
-inteiros.
+- `minDocumentAreaRatio`;
+- `requestHeaders`;
+- `signal`.
 
-O prazo é cooperativo. Download e leitura podem ser abortados; fases de imagem
-que não observam o sinal só verificam a interrupção entre pontos de controle.
-`--timeout-ms` não é um teto rígido de tempo de parede.
+## Regras de arquivo e formato
 
-`minDocumentAreaRatio`, `requestHeaders` e `signal` existem somente na API.
-A sintaxe aceita é `--opção valor`; não há opções curtas,
-`--opção=valor` nem marcador `--` para encerrar a análise de argumentos. Um
-caminho iniciado por `--` é interpretado como opção.
+### Inferência por extensão
 
-## Formato inferido pelo arquivo
-
-Com `--output`, estas extensões selecionam o formato automaticamente:
+As extensões reconhecidas são:
 
 | Extensão        | Formato |
 | --------------- | ------- |
@@ -83,205 +79,128 @@ Com `--output`, estas extensões selecionam o formato automaticamente:
 | `.webp`         | WebP    |
 | `.pdf`          | PDF     |
 
-Uma extensão conhecida em conflito com `--format` é erro de argumento:
+Quando a extensão é reconhecida e `--format` informa outro contêiner, a CLI rejeita os argumentos. Para uma extensão desconhecida, o formato padrão é PNG, a menos que `--format` seja explícito.
 
-```bash
-# Inválido: a extensão pede PNG e a opção pede PDF.
-cerne-scanner ./foto.jpg --output ./scan.png --format pdf
-```
+### Proteção contra substituição
 
-Para uma extensão desconhecida, informe `--format`; sem a opção, o padrão é
-PNG. A extensão da **entrada** não participa dessa decisão.
+Sem `--force`, o arquivo é aberto em modo exclusivo. Se já existir, a CLI não o altera e devolve `PROCESSING_ERROR`. Com `--force`, a escrita pode substituir o destino.
 
-## Arquivo de saída
-
-Por padrão, a CLI cria um arquivo novo e recusa substituir um caminho existente.
-Use `--force` somente quando a substituição for intencional:
-
-```bash
-cerne-scanner ./foto.jpg --output ./scan.webp --force
-```
-
-A CLI não cria diretórios. O diretório pai de `--output` precisa existir. O
-arquivo só é gravado quando `scanDocument` produz saída, inclusive quando o
-resultado é `partial`.
-
-Com `--force`, a gravação trunca o arquivo existente e não é uma troca atômica;
-uma falha do sistema de arquivos pode deixá-lo vazio ou incompleto. Sem
-`--output`, `--force` é aceito, mas não tem efeito.
-
-Quando `--output` é usado:
-
-- o JSON omite `data`;
-- `outputWritten` vale `true` em uma gravação bem-sucedida;
-- `outputWritten` vale `false` em `not_found` ou erro de processamento;
-- quando há saída, `output` ainda descreve formato, tipo de mídia, bytes e
-  dimensões;
-- o caminho de saída não é reproduzido no JSON.
-
-Falha de gravação retorna código `PROCESSING_ERROR` e não deixa o comando sair
-com sucesso.
+A escrita ocorre somente quando `scanDocument` devolve `success: true`, incluindo status `partial`.
 
 ## Cantos manuais
 
-```text
---corners x1,y1;x2,y2;x3,y3;x4,y4
-```
-
-Informe quatro pontos na convenção superior esquerdo, superior direito, inferior
-direito e inferior esquerdo (`TL,TR,BR,BL`). O Scanner reordena os pontos para
-essa sequência canônica durante a validação. As coordenadas pertencem à imagem
-depois da orientação EXIF.
-
-O ponto e vírgula separa comandos em shells comuns; coloque o valor inteiro
-entre aspas:
-
 ```bash
-cerne-scanner ./foto.jpg \
-  --corners "120,90;1780,130;1710,2440;160,2380" \
-  --output ./scan.png
+cerne-scanner ./foto.jpg --output ./scan.png --corners "120,80;1820,110;1760,1320;90,1290"
 ```
 
-Cantos precisam ser finitos, distintos, suficientemente separados e formar um
-quadrilátero convexo, não degenerado e bem condicionado. A validação admite uma
-tolerância de até 1% do maior eixo em torno dos limites da imagem.
+Os quatro pares são interpretados como `topLeft`, `topRight`, `bottomRight` e `bottomLeft`. O núcleo reordena e valida o quadrilátero, mas forneça a ordem documentada para manter o comando legível. Coordenadas são da imagem depois da orientação EXIF, não do raster reduzido de detecção.
 
-Cantos manuais ignoram a detecção automática. Nessa execução,
-`--min-confidence`, `--detection-size` e `--no-frame-fallback` não alteram o
-resultado; `--padding` continua sendo aplicado antes da correção. Se os cantos
-tocarem a margem da imagem, o resultado continua sendo `partial`.
+## JSON de resposta
 
-## Códigos de saída
+### Saída textual
 
-| Código | Significado                                                 |
-| ------ | ----------------------------------------------------------- |
-| `0`    | Saída produzida, inclusive `status: "partial"`, ou `--help` |
-| `2`    | `status: "not_found"` — nenhuma folha aceita                |
-| `1`    | Erro de argumento, carregamento, processamento ou gravação  |
+Com `--encoding`, a CLI imprime o `ScanResult` completo. Exemplo estrutural abreviado:
 
-Quando não há falha própria da CLI, `result.success: true` produz código `0`.
-Portanto, `partial` sai com `0`: houve um arquivo, mas a geometria pede revisão.
-Uma falha ao gravar `--output` prevalece sobre o scan e produz `1`. Confira
-`status` e `warnings` quando a completude importar.
-
-Erros do analisador de argumentos — opção desconhecida, valor ausente ou não
-numérico, quantidade de fontes, forma de entrega e conflito de formato —
-produzem JSON com `error.code === "INVALID_INPUT"`. Valores fora da faixa,
-inteiros fracionários e cantos geometricamente inválidos chegam ao Scanner como
-`INVALID_OPTIONS`. Não há diagnóstico solto em stderr.
-
-## Sem credenciais na CLI
-
-A CLI não aceita cabeçalhos, cookies nem usuário/senha na URL. Para imagens
-privadas, use a API com `requestHeaders`:
-
-```ts
-await scanDocument(url, {
-  requestHeaders: { Authorization: "Bearer <token>" },
-});
-```
-
-Evite tokens na string de consulta da linha de comando: argumentos podem
-aparecer no histórico do terminal e na lista de processos. A CLI também não
-aplica política de SSRF; use apenas URLs públicas já controladas.
-
-## Exemplos
-
-PNG com opções padrão:
-
-```bash
-cerne-scanner ./foto.jpg --output ./scan.png --pretty
-```
-
-PDF A4 em escala de cinza:
-
-```bash
-cerne-scanner ./foto.webp \
-  --output ./scan.pdf \
-  --paper-size a4 \
-  --enhancement grayscale \
-  --quality 90 \
-  --pretty
-```
-
-Documento preto e branco, sem fallback do quadro:
-
-```bash
-cerne-scanner ./pagina.png \
-  --output ./scan.png \
-  --enhancement black-white \
-  --no-frame-fallback
-```
-
-URL pública com prazo próprio:
-
-```bash
-cerne-scanner https://documents.example.com/public/foto.avif \
-  --output ./scan.jpg \
-  --timeout-ms 30000
-```
-
-JPEG como Base64 no JSON:
-
-```bash
-cerne-scanner ./foto.tiff --encoding base64 --format jpeg --quality 85
-```
-
-Data URL pronta para transporte textual:
-
-```bash
-cerne-scanner ./foto.avif --encoding data-url --format webp
-```
-
-## Consumindo a saída
-
-Somente o Base64:
-
-```bash
-cerne-scanner ./foto.jpg --encoding base64 --format png | jq -r '.data'
-```
-
-Status, método e confiança depois de gravar o arquivo:
-
-```bash
-cerne-scanner ./foto.jpg --output ./scan.png \
-  | jq '{status, outputWritten, method: .detection.method, confidence}'
-```
-
-No PowerShell, reconstruindo um JPEG recebido como Base64:
-
-```powershell
-$resultado = cerne-scanner ./foto.png --encoding base64 --format jpeg |
-  ConvertFrom-Json
-
-if ($resultado.success) {
-  [IO.File]::WriteAllBytes(
-    "scan.jpg",
-    [Convert]::FromBase64String($resultado.data)
-  )
+```json
+{
+  "status": "success",
+  "success": true,
+  "confidence": 0.82,
+  "data": "...base64...",
+  "output": {
+    "format": "jpeg",
+    "encoding": "base64",
+    "mimeType": "image/jpeg",
+    "byteLength": 123456,
+    "width": 1654,
+    "height": 2339
+  },
+  "detection": {},
+  "metadata": {},
+  "warnings": [],
+  "error": null
 }
 ```
 
-Ramificando por código de saída:
+### Saída em arquivo
 
-```bash
-cerne-scanner ./foto.jpg --output ./scan.png > resultado.json
-case $? in
-  0) jq -r '.status' resultado.json ;;
-  2) echo "nenhuma folha detectada" ;;
-  *) jq -r '.error.code // "erro"' resultado.json ;;
-esac
+Com `--output`, `data` é omitido do JSON e a CLI acrescenta:
+
+```json
+{
+  "outputWritten": true
+}
 ```
 
-Base64 e Data URL contêm o documento completo, aumentam consumo de memória e
-podem expor conteúdo sensível. Não registre o JSON integral dessas modalidades.
+Os demais campos de resultado permanecem disponíveis. `outputWritten` acompanha `result.success` depois que a escrita terminou sem erro.
 
-## Ajuda
+### Erro de argumentos
 
-```bash
-cerne-scanner --help
+Falhas de parsing usam a forma:
+
+```json
+{
+  "status": "error",
+  "success": false,
+  "error": {
+    "code": "INVALID_INPUT",
+    "message": "..."
+  }
+}
 ```
 
-Devolve um descritor JSON com `name`, `usage`, `inputFormats`, `outputFormats`,
-`examples` e a lista de `options`. `--help` tem precedência sobre qualquer outro
-argumento e sempre sai com `0`.
+Opção desconhecida, falta de valor, quantidade de fontes diferente de uma e combinação inválida de saída terminam antes do scanner.
+
+## Códigos de saída do processo
+
+| Código | Condição                                                                            |
+| -----: | ----------------------------------------------------------------------------------- |
+|    `0` | Ajuda, ou scan com `result.success: true`, inclusive `partial`.                     |
+|    `1` | Argumentos inválidos, erro de processamento/escrita ou outro resultado sem sucesso. |
+|    `2` | `status: "not_found"`.                                                              |
+
+Não use apenas o código 0 para concluir que a folha foi detectada integralmente: examine `status`. `partial` sai com código 0 porque há um artefato produzido.
+
+## Exemplos operacionais
+
+### JPEG com qualidade explícita
+
+```bash
+cerne-scanner ./entrada.png --output ./saida.jpg --quality 88 --enhancement color --pretty
+```
+
+### PDF A4 em preto e branco
+
+```bash
+cerne-scanner ./foto.webp --output ./documento.pdf --paper-size a4 --enhancement black-white
+```
+
+Nesse modo, o PDF incorpora PNG binário em vez de raster JPEG; `--quality` não altera essa imagem lossless.
+
+### Data URL para integração textual
+
+```bash
+cerne-scanner ./foto.jpg --encoding data-url --format webp --quality 82
+```
+
+### Detecção mais completa sem fallback de quadro
+
+```bash
+cerne-scanner ./foto.jpg --output ./scan.png --performance accurate --no-frame-fallback
+```
+
+### Arquivo existente com substituição intencional
+
+```bash
+cerne-scanner ./foto.jpg --output ./scan.png --force
+```
+
+## Uso em automação
+
+- Leia somente `stdout` como JSON.
+- Trate códigos 0, 1 e 2 separadamente.
+- Em código 0, diferencie `success` de `partial` pelo campo `status`.
+- Não registre o campo `data` quando ele contiver documento sensível.
+- Prefira `--output` para arquivos grandes: Base64 aumenta o tamanho textual e mantém a string na memória.
+- Gere nomes de saída exclusivos quando vários processos rodarem em paralelo.
+- A CLI não aceita cabeçalhos HTTP; para uma URL autenticada, use a API programática com `requestHeaders`, valide protocolo, origem e destinos de rede e não registre credenciais nem o conteúdo processado.

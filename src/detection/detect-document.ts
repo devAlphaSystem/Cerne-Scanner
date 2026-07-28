@@ -134,7 +134,10 @@ function samplePixel(data: Uint8Array, width: number, height: number, x: number,
 }
 
 function edgeSupport(points: readonly Point[], edges: CvMat): number {
-  const radius = Math.max(1, Math.min(3, Math.round(Math.min(edges.cols, edges.rows) / 500)));
+  const data = edges.data;
+  const width = edges.cols;
+  const height = edges.rows;
+  const radius = Math.max(1, Math.min(3, Math.round(Math.min(width, height) / 500)));
   let supported = 0;
   let total = 0;
   for (let side = 0; side < points.length; side += 1) {
@@ -149,7 +152,7 @@ function edgeSupport(points: readonly Point[], edges: CvMat): number {
       let hit = false;
       for (let offsetY = -radius; offsetY <= radius && !hit; offsetY += 1) {
         for (let offsetX = -radius; offsetX <= radius; offsetX += 1) {
-          if ((samplePixel(edges.data, edges.cols, edges.rows, x + offsetX, y + offsetY) ?? 0) > 0) {
+          if ((samplePixel(data, width, height, x + offsetX, y + offsetY) ?? 0) > 0) {
             hit = true;
             break;
           }
@@ -163,7 +166,10 @@ function edgeSupport(points: readonly Point[], edges: CvMat): number {
 }
 
 function contrastSupport(points: readonly Point[], gray: CvMat): number {
-  const offset = Math.max(4, Math.min(12, Math.round(Math.min(gray.cols, gray.rows) * 0.009)));
+  const data = gray.data;
+  const width = gray.cols;
+  const height = gray.rows;
+  const offset = Math.max(4, Math.min(12, Math.round(Math.min(width, height) * 0.009)));
   let contrast = 0;
   let samplesUsed = 0;
   for (let side = 0; side < points.length; side += 1) {
@@ -177,8 +183,8 @@ function contrastSupport(points: readonly Point[], gray: CvMat): number {
       const t = index / 10;
       const x = start.x + (end.x - start.x) * t;
       const y = start.y + (end.y - start.y) * t;
-      const inside = samplePixel(gray.data, gray.cols, gray.rows, x + normal.x * offset, y + normal.y * offset);
-      const outside = samplePixel(gray.data, gray.cols, gray.rows, x - normal.x * offset, y - normal.y * offset);
+      const inside = samplePixel(data, width, height, x + normal.x * offset, y + normal.y * offset);
+      const outside = samplePixel(data, width, height, x - normal.x * offset, y - normal.y * offset);
       if (inside === null || outside === null) continue;
       contrast += clamp(Math.abs(inside - outside) / 70);
       samplesUsed += 1;
@@ -334,10 +340,11 @@ function lineCandidates(cv: CvRuntime, gray: CvMat, combined: CvMat, options: Re
     cv.HoughLinesP(combined, linesMat, 1, Math.PI / 360, Math.max(35, Math.round(Math.min(gray.cols, gray.rows) * 0.055)), Math.min(gray.cols, gray.rows) * 0.24, Math.min(gray.cols, gray.rows) * 0.035);
     const horizontal: LineSegment[] = [];
     const vertical: LineSegment[] = [];
+    const lineData = linesMat.data32S;
     for (let index = 0; index < linesMat.rows; index += 1) {
       const offset = index * 4;
-      const start = { x: linesMat.data32S[offset] ?? 0, y: linesMat.data32S[offset + 1] ?? 0 };
-      const end = { x: linesMat.data32S[offset + 2] ?? 0, y: linesMat.data32S[offset + 3] ?? 0 };
+      const start = { x: lineData[offset] ?? 0, y: lineData[offset + 1] ?? 0 };
+      const end = { x: lineData[offset + 2] ?? 0, y: lineData[offset + 3] ?? 0 };
       const dx = end.x - start.x;
       const dy = end.y - start.y;
       const length = Math.hypot(dx, dy);
@@ -405,18 +412,21 @@ function fitSide(points: readonly Point[], start: Point, end: Point): FittedLine
 function fitEdgeSide(edges: CvMat, start: Point, end: Point): FittedLine {
   const length = distance(start, end);
   if (length < 1) return { point: start, direction: { x: end.x - start.x, y: end.y - start.y } };
+  const data = edges.data;
+  const width = edges.cols;
+  const height = edges.rows;
   const tangent = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
   const normal = { x: -tangent.y, y: tangent.x };
-  const band = Math.max(3, Math.min(10, Math.round(Math.min(edges.cols, edges.rows) * 0.006)));
+  const band = Math.max(3, Math.min(10, Math.round(Math.min(width, height) * 0.006)));
   const extension = length * 0.025;
   const minimumX = Math.max(0, Math.floor(Math.min(start.x, end.x) - band - Math.abs(tangent.x) * extension));
-  const maximumX = Math.min(edges.cols - 1, Math.ceil(Math.max(start.x, end.x) + band + Math.abs(tangent.x) * extension));
+  const maximumX = Math.min(width - 1, Math.ceil(Math.max(start.x, end.x) + band + Math.abs(tangent.x) * extension));
   const minimumY = Math.max(0, Math.floor(Math.min(start.y, end.y) - band - Math.abs(tangent.y) * extension));
-  const maximumY = Math.min(edges.rows - 1, Math.ceil(Math.max(start.y, end.y) + band + Math.abs(tangent.y) * extension));
+  const maximumY = Math.min(height - 1, Math.ceil(Math.max(start.y, end.y) + band + Math.abs(tangent.y) * extension));
   const points: Point[] = [];
   for (let y = minimumY; y <= maximumY; y += 1) {
     for (let x = minimumX; x <= maximumX; x += 1) {
-      if ((edges.data[y * edges.cols + x] ?? 0) === 0) continue;
+      if ((data[y * width + x] ?? 0) === 0) continue;
       const relative = { x: x - start.x, y: y - start.y };
       const along = relative.x * tangent.x + relative.y * tangent.y;
       const across = Math.abs(relative.x * normal.x + relative.y * normal.y);
@@ -457,25 +467,28 @@ function frameDetection(gray: CvMat, options: ResolvedOptions): DocumentDetectio
   const gridColumns = 4;
   const gridRows = 6;
   const darkCells = new Uint32Array(gridColumns * gridRows);
-  for (let index = 0; index < gray.data.length; index += 1) {
-    const value = gray.data[index] ?? 0;
+  const data = gray.data;
+  const width = gray.cols;
+  const height = gray.rows;
+  for (let index = 0; index < data.length; index += 1) {
+    const value = data[index] ?? 0;
     sum += value;
     if (value >= 165) bright += 1;
     if (value <= 110) {
       dark += 1;
-      const x = index % gray.cols;
-      const y = Math.floor(index / gray.cols);
-      const column = Math.min(gridColumns - 1, Math.floor((x * gridColumns) / gray.cols));
-      const row = Math.min(gridRows - 1, Math.floor((y * gridRows) / gray.rows));
+      const x = index % width;
+      const y = Math.floor(index / width);
+      const column = Math.min(gridColumns - 1, Math.floor((x * gridColumns) / width));
+      const row = Math.min(gridRows - 1, Math.floor((y * gridRows) / height));
       const cellIndex = row * gridColumns + column;
       darkCells[cellIndex] = (darkCells[cellIndex] ?? 0) + 1;
     }
   }
-  const pixels = gray.rows * gray.cols;
+  const pixels = height * width;
   const brightRatio = bright / pixels;
   const darkRatio = dark / pixels;
   const mean = sum / pixels;
-  const aspect = Math.min(gray.cols, gray.rows) / Math.max(gray.cols, gray.rows);
+  const aspect = Math.min(width, height) / Math.max(width, height);
   const occupiedRows = new Set<number>();
   const occupiedColumns = new Set<number>();
   let occupiedCells = 0;
@@ -489,9 +502,9 @@ function frameDetection(gray: CvMat, options: ResolvedOptions): DocumentDetectio
   if (brightRatio < 0.62 || darkRatio < 0.002 || mean < 160 || aspect < 0.35 || occupiedCells < 6 || occupiedRows.size < 3 || occupiedColumns.size < 2) return null;
   const corners = arrayToCorners([
     { x: 0, y: 0 },
-    { x: gray.cols - 1, y: 0 },
-    { x: gray.cols - 1, y: gray.rows - 1 },
-    { x: 0, y: gray.rows - 1 },
+    { x: width - 1, y: 0 },
+    { x: width - 1, y: height - 1 },
+    { x: 0, y: height - 1 },
   ]);
   const confidence = clamp(0.47 + brightRatio * 0.12 + Math.min(0.08, darkRatio * 1.6));
   if (confidence < options.minConfidence) return null;
@@ -536,9 +549,11 @@ export async function detectCorners(image: DecodedImage, options: ResolvedOption
     if (best !== undefined && best.score >= options.minConfidence) {
       const refined = options.performance === "fast" ? best : refineCandidate(best, combined);
       const corners = arrayToCorners(refined.points);
-      const frame = frameDetection(gray, options);
-      if (frame !== null && refined.areaRatio >= 0.65 && touchesImageFrame(corners, image.width, image.height)) {
-        return { candidatesEvaluated: evaluated + 1, detection: { ...frame, candidatesEvaluated: evaluated + 1 } };
+      if (refined.areaRatio >= 0.65 && touchesImageFrame(corners, image.width, image.height)) {
+        const frame = frameDetection(gray, options);
+        if (frame !== null) {
+          return { candidatesEvaluated: evaluated + 1, detection: { ...frame, candidatesEvaluated: evaluated + 1 } };
+        }
       }
       return {
         candidatesEvaluated: evaluated,

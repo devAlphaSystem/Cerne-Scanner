@@ -12,10 +12,26 @@ interface ProfileDefaults {
   timeoutMs: number;
 }
 
+/**
+ * Bounds the corrected raster, which is what actually sizes the process.
+ *
+ * The output canvas is allocated twice at full size — once as an OpenCV matrix
+ * in the WebAssembly heap and once as the copy handed to encoding — so every
+ * megapixel here costs eight megabytes of peak memory. Since that heap only
+ * ever grows, a single oversized scan raises the floor of a long-lived process
+ * for good, which makes a generous default expensive in a way that never shows
+ * up in a one-shot command.
+ *
+ * The defaults are therefore expressed in scanning terms rather than camera
+ * terms: eight megapixels is an A4 page at roughly 300 DPI, the resolution
+ * document capture and OCR are specified against, and no sheet of paper carries
+ * detail beyond it. Callers that genuinely need a larger raster can still raise
+ * `maxOutputPixels` per scan.
+ */
 const PROFILE_DEFAULTS: Record<PerformanceProfile, ProfileDefaults> = {
-  fast: { detectionMaxDimension: 960, maxInputPixels: 60_000_000, maxOutputPixels: 20_000_000, timeoutMs: 20_000 },
-  balanced: { detectionMaxDimension: 1440, maxInputPixels: 100_000_000, maxOutputPixels: 32_000_000, timeoutMs: 60_000 },
-  accurate: { detectionMaxDimension: 2048, maxInputPixels: 160_000_000, maxOutputPixels: 50_000_000, timeoutMs: 120_000 },
+  fast: { detectionMaxDimension: 960, maxInputPixels: 60_000_000, maxOutputPixels: 4_000_000, timeoutMs: 20_000 },
+  balanced: { detectionMaxDimension: 1440, maxInputPixels: 100_000_000, maxOutputPixels: 8_000_000, timeoutMs: 60_000 },
+  accurate: { detectionMaxDimension: 2048, maxInputPixels: 160_000_000, maxOutputPixels: 16_000_000, timeoutMs: 120_000 },
 };
 
 /**
@@ -40,17 +56,19 @@ export interface ResolvedOptions {
   minConfidence: number;
   /** Sets the minimum document-to-image area ratio for automatic detection from 0.02 through 0.95, defaulting to 0.12. */
   minDocumentAreaRatio: number;
+  /** Sets the smallest image share an automatic boundary must enclose to be reported as `success` instead of `partial`, from zero through 0.95 and defaulting to 0.20. */
+  minSuccessAreaRatio: number;
   /** Expands selected corners before scan output transformation by a ratio from zero through 0.05, defaulting to 0.003; detection-only operations do not apply it. */
   paddingRatio: number;
   /** Controls whether the full image frame may be returned as a partial detection, defaulting to `true`. */
   allowFrameFallback: boolean;
   /** Limits the automatic-detection raster's longest axis from 320 through 4,096 pixels, defaulting to 960 for `fast`, 1,440 for `balanced`, and 2,048 for `accurate`; manual detection does not decode this raster. */
   detectionMaxDimension: number;
-  /** Limits input size from one byte through 1 GiB, defaulting to 40 MiB. */
+  /** Limits input size from one byte through 1 GiB, defaulting to 40 MiB; this bounds transfer and storage, not memory, because a small file may still decode to a very large raster. */
   maxFileSizeBytes: number;
   /** Limits the validated EXIF-oriented source-image area before raster decoding from 250,000 through 250,000,000 pixels, defaulting to 60 million for `fast`, 100 million for `balanced`, and 160 million for `accurate`. */
   maxInputPixels: number;
-  /** Limits output area from 250,000 through 100,000,000 pixels, defaulting to 20 million for `fast`, 32 million for `balanced`, and 50 million for `accurate`. */
+  /** Limits output area from 250,000 through 100,000,000 pixels, defaulting to 4 million for `fast`, 8 million for `balanced`, and 16 million for `accurate`; this is the dominant control over peak memory. */
   maxOutputPixels: number;
   /** Limits processing to 0 through 3,600,000 milliseconds, defaulting to 20 seconds for `fast`, 60 seconds for `balanced`, and 120 seconds for `accurate`; zero disables the deadline. */
   timeoutMs: number;
@@ -219,6 +237,7 @@ export function resolveOptions(options: ScanOptions | DetectOptions = {}, operat
     ...(manualCorners === undefined ? {} : { manualCorners }),
     minConfidence: numberInRange("minConfidence", options.minConfidence, 0.58, 0, 1),
     minDocumentAreaRatio: numberInRange("minDocumentAreaRatio", options.minDocumentAreaRatio, 0.12, 0.02, 0.95),
+    minSuccessAreaRatio: numberInRange("minSuccessAreaRatio", options.minSuccessAreaRatio, 0.2, 0, 0.95),
     paddingRatio: numberInRange("paddingRatio", options.paddingRatio, 0.003, 0, 0.05),
     allowFrameFallback: options.allowFrameFallback ?? true,
     detectionMaxDimension: integerInRange("detectionMaxDimension", options.detectionMaxDimension, profile.detectionMaxDimension, 320, 4096),
