@@ -1,9 +1,21 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
+import { resolve as resolvePath } from "node:path";
 
-import type { DetectOptions, DocumentCorners, EnhancementMode, OutputEncoding, OutputFormat, PaperSize, PerformanceProfile, ScanOptions } from "./types";
+import type { DetectOptions, DocumentCorners, EnhancementMode, OutputEncoding, OutputFormat, PaperSize, PerformanceProfile, ScanOptions, StreamStorage } from "./types";
 
 const MEBIBYTE = 1024 * 1024;
 const BLOCKED_REQUEST_HEADERS = new Set(["accept-encoding", "connection", "content-length", "expect", "host", "if-range", "keep-alive", "proxy-connection", "range", "te", "trailer", "transfer-encoding", "upgrade"]);
+
+/**
+ * Keeps a streamed input in memory until it grows large enough to be worth a temporary file.
+ *
+ * Documents photographed by a phone sit far below this threshold, so the common case never touches the disk,
+ * while an unexpectedly large upload stops competing with the raster allocations that actually size the process.
+ */
+export const DEFAULT_STREAM_MEMORY_THRESHOLD_BYTES = 8 * MEBIBYTE;
+
+/** Selects the storage policy applied to stream inputs when the caller does not choose one. */
+export const DEFAULT_STREAM_STORAGE: StreamStorage = "auto";
 
 interface ProfileDefaults {
   detectionMaxDimension: number;
@@ -66,6 +78,12 @@ export interface ResolvedOptions {
   detectionMaxDimension: number;
   /** Limits input size from one byte through 1 GiB, defaulting to 40 MiB; this bounds transfer and storage, not memory, because a small file may still decode to a very large raster. */
   maxFileSizeBytes: number;
+  /** Selects where a stream input is held while it is consumed, defaulting to `auto`; path, URL, and in-memory inputs ignore it. */
+  streamStorage: StreamStorage;
+  /** Sets the byte count an `auto` stream may hold in memory before migrating to a temporary file, defaulting to 8 MiB. */
+  streamMemoryThresholdBytes: number;
+  /** Stores the resolved directory that receives scanner-owned temporary stream files, when the caller supplied one. */
+  streamTempDirectory?: string;
   /** Limits the validated EXIF-oriented source-image area before raster decoding from 250,000 through 250,000,000 pixels, defaulting to 60 million for `fast`, 100 million for `balanced`, and 160 million for `accurate`. */
   maxInputPixels: number;
   /** Limits output area from 250,000 through 100,000,000 pixels, defaulting to 4 million for `fast`, 8 million for `balanced`, and 16 million for `accurate`; this is the dominant control over peak memory. */
@@ -175,6 +193,12 @@ function normalizeManualCorners(corners: ScanOptions["manualCorners"]): Document
   }
 }
 
+function normalizeTempDirectory(directory: ScanOptions["streamTempDirectory"]): string | undefined {
+  if (directory === undefined) return undefined;
+  if (typeof directory !== "string" || directory.trim() === "") throw new InvalidOptionsError("streamTempDirectory must be a non-empty path to an existing directory.");
+  return resolvePath(directory);
+}
+
 function validateSignal(signal: ScanOptions["signal"]): void {
   if (signal === undefined) return;
   if (typeof signal !== "object" || signal === null || typeof signal.aborted !== "boolean" || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function") {
@@ -223,10 +247,16 @@ export function resolveOptions(options: ScanOptions | DetectOptions = {}, operat
     throw new InvalidOptionsError("paperSize must be detected, auto, a4, or letter.");
   }
 
+  const streamStorage = options.streamStorage ?? DEFAULT_STREAM_STORAGE;
+  if (!isOneOf(streamStorage, ["memory", "file", "auto"] as const)) {
+    throw new InvalidOptionsError("streamStorage must be memory, file, or auto.");
+  }
+
   if (options.allowFrameFallback !== undefined && typeof options.allowFrameFallback !== "boolean") throw new InvalidOptionsError("allowFrameFallback must be a boolean.");
   validateSignal(options.signal);
   const requestHeaders = normalizeRequestHeaders(options.requestHeaders);
   const manualCorners = normalizeManualCorners(options.manualCorners);
+  const streamTempDirectory = normalizeTempDirectory(options.streamTempDirectory);
   return {
     performance,
     format,
@@ -242,6 +272,9 @@ export function resolveOptions(options: ScanOptions | DetectOptions = {}, operat
     allowFrameFallback: options.allowFrameFallback ?? true,
     detectionMaxDimension: integerInRange("detectionMaxDimension", options.detectionMaxDimension, profile.detectionMaxDimension, 320, 4096),
     maxFileSizeBytes: integerInRange("maxFileSizeBytes", options.maxFileSizeBytes, 40 * MEBIBYTE, 1, 1024 * MEBIBYTE),
+    streamStorage,
+    streamMemoryThresholdBytes: integerInRange("streamMemoryThresholdBytes", options.streamMemoryThresholdBytes, DEFAULT_STREAM_MEMORY_THRESHOLD_BYTES, 1, 1024 * MEBIBYTE),
+    ...(streamTempDirectory === undefined ? {} : { streamTempDirectory }),
     maxInputPixels: integerInRange("maxInputPixels", options.maxInputPixels, profile.maxInputPixels, 250_000, 250_000_000),
     maxOutputPixels: integerInRange("maxOutputPixels", "maxOutputPixels" in options ? options.maxOutputPixels : undefined, profile.maxOutputPixels, 250_000, 100_000_000),
     timeoutMs: integerInRange("timeoutMs", options.timeoutMs, profile.timeoutMs, 0, 3_600_000),

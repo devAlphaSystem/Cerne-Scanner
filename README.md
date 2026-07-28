@@ -2,7 +2,7 @@
 
 Biblioteca e CLI para localizar uma folha em uma fotografia, corrigir a perspectiva e gerar PNG, JPEG, WebP ou PDF. O processamento é local, orientado a CPU e voltado a Node.js; não há serviço HTTP, interface web, OCR ou armazenamento embutido.
 
-O pipeline aceita caminho local, URL HTTP(S) sem credenciais ou bytes em memória. A imagem é validada, orientada por EXIF, analisada pelo OpenCV.js, corrigida por homografia e codificada com `sharp`/libvips e, no caso de PDF, `pdf-lib`.
+O pipeline aceita caminho local, URL HTTP(S) sem credenciais, bytes em memória, `Readable` do Node.js ou qualquer `AsyncIterable<Uint8Array>`. A imagem é validada, orientada por EXIF, analisada pelo OpenCV.js, corrigida por homografia e codificada com `sharp`/libvips e, no caso de PDF, `pdf-lib`.
 
 ## Recursos principais
 
@@ -14,6 +14,7 @@ O pipeline aceita caminho local, URL HTTP(S) sem credenciais ou bytes em memóri
 - Proporção detectada, A4, Letter ou ajuste automático entre A4 e Letter.
 - Resultados estruturados com status, confiança, avisos, métricas por etapa e códigos de erro estáveis.
 - Limites configuráveis de bytes de entrada, pixels de origem, pixels de saída e duração.
+- Entrada em stream com política explícita de armazenamento: `memory`, `file` ou `auto`.
 - Cancelamento com `AbortSignal`, aquecimento do OpenCV e liberação do cache do `sharp`.
 
 ## Requisitos e instalação
@@ -72,16 +73,31 @@ if (result.success) {
 
 ## Entradas e saídas
 
-| Categoria          | Valores aceitos                                                                     |
-| ------------------ | ----------------------------------------------------------------------------------- |
-| Entrada            | Caminho local, URL `http://` ou `https://`, `ArrayBuffer`, `Uint8Array` ou `Buffer` |
-| Imagem de entrada  | JPEG, PNG, WebP, TIFF, AVIF e HEIF, identificados pela assinatura dos bytes         |
-| Contêiner de saída | PNG, JPEG, WebP e PDF                                                               |
-| Representação      | `Buffer`, Base64 e Data URL                                                         |
-| Realce             | `none`, `color`, `grayscale` e `black-white`                                        |
-| Papel              | `detected`, `auto`, `a4` e `letter`                                                 |
+| Categoria          | Valores aceitos                                                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Entrada            | Caminho local, URL `http://` ou `https://`, `ArrayBuffer`, `Uint8Array`, `Buffer`, `Readable` ou `AsyncIterable<Uint8Array>` |
+| Imagem de entrada  | JPEG, PNG, WebP, TIFF, AVIF e HEIF, identificados pela assinatura dos bytes                                                  |
+| Contêiner de saída | PNG, JPEG, WebP e PDF                                                                                                        |
+| Representação      | `Buffer`, Base64 e Data URL                                                                                                  |
+| Realce             | `none`, `color`, `grayscale` e `black-white`                                                                                 |
+| Papel              | `detected`, `auto`, `a4` e `letter`                                                                                          |
 
 Imagens animadas ou com múltiplas páginas não são aceitas. TIFF e HEIF são entradas de imagem estática; o scanner não importa documentos multipágina.
+
+### Entrada em stream
+
+```js
+import { scanDocument } from "cerne-scanner";
+
+const result = await scanDocument(readable, {
+  streamStorage: "auto",
+  streamMemoryThresholdBytes: 1024 * 1024,
+  maxFileSizeBytes: 25 * 1024 * 1024,
+  signal,
+});
+```
+
+`streamStorage` decide onde os bytes ficam enquanto o stream é consumido: `memory` acumula na memória do processo, `file` grava cada bloco em um temporário do scanner e `auto` (padrão) começa na memória e migra para um temporário ao ultrapassar `streamMemoryThresholdBytes`. A política vale apenas para streams; `Buffer`, `Uint8Array` e `ArrayBuffer` já estão na memória e nunca vão para disco. Temporários criados pelo scanner são removidos ao fim da chamada, inclusive em erro, timeout, aborto ou `not_found`. Detalhes em [docs/API.md](docs/API.md#entradas-em-stream).
 
 ## Semântica dos resultados
 

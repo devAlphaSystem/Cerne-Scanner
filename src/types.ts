@@ -1,9 +1,25 @@
+import type { Readable } from "node:stream";
+
 /**
- * Represents a local path, credential-free HTTP(S) URL, `ArrayBuffer`, `Uint8Array`, or `Buffer` accepted for scanning.
+ * Represents a local path, credential-free HTTP(S) URL, `ArrayBuffer`, `Uint8Array`, `Buffer`, `Readable`, or async byte iterable accepted for scanning.
  *
  * @since 0.1.0
  */
-export type ScanInput = string | ArrayBuffer | Uint8Array;
+export type ScanInput = string | ArrayBuffer | Uint8Array | Readable | AsyncIterable<Uint8Array>;
+
+/**
+ * Selects where the bytes of a streamed input are held while the stream is consumed.
+ *
+ * `memory` accumulates the stream in process memory under `maxFileSizeBytes`. `file` writes every chunk to a
+ * scanner-owned temporary file as it arrives. `auto` keeps the stream in memory until `streamMemoryThresholdBytes`
+ * would be exceeded and then migrates the bytes already received to a temporary file without restarting the read.
+ *
+ * The policy applies only to `Readable` and async-iterable inputs. Bytes supplied as `ArrayBuffer`, `Uint8Array`,
+ * or `Buffer` are already resident in memory and are never written to disk.
+ *
+ * @since 0.4.0
+ */
+export type StreamStorage = "memory" | "file" | "auto";
 
 /**
  * Identifies an image format supported by the decoding pipeline.
@@ -160,6 +176,12 @@ export interface ScanOptions<TEncoding extends OutputEncoding = OutputEncoding> 
   detectionMaxDimension?: number;
   /** Limits accepted source size from one byte through 1 GiB, defaulting to 40 MiB. */
   maxFileSizeBytes?: number;
+  /** Selects where a `Readable` or async-iterable input is held while it is consumed, defaulting to `auto`; it has no effect on path, URL, or in-memory inputs. */
+  streamStorage?: StreamStorage;
+  /** Sets the byte count a `auto` stream may hold in memory before it migrates to a temporary file, from one byte through 1 GiB and defaulting to 8 MiB. */
+  streamMemoryThresholdBytes?: number;
+  /** Selects an existing directory for scanner-owned temporary stream files, defaulting to the system temporary directory. */
+  streamTempDirectory?: string;
   /** Limits the validated EXIF-oriented source-image area before raster decoding from 250,000 through 250 million pixels, defaulting to 60, 100, or 160 million by profile. */
   maxInputPixels?: number;
   /** Limits corrected output-image area from 250,000 through 100 million pixels, defaulting to 4, 8, or 16 million by profile. */

@@ -3,6 +3,20 @@ import type { ResolvedOptions } from "./options";
 import { elapsedMilliseconds, startTimer, type MonotonicTimestamp } from "./timing";
 
 /**
+ * Converts an aborted signal into the categorized failure that stopped the work.
+ *
+ * The scanner's own guard aborts with a {@link ScanFailure} reason so a deadline is reported as `TIMEOUT`
+ * instead of a generic cancellation; any other reason is reported as `ABORTED`.
+ *
+ * @param {AbortSignal} [signal] - The signal to inspect, which may be absent.
+ * @returns {ScanFailure|null} The failure to raise, or `null` when the signal is absent or still active.
+ */
+export function failureFromSignal(signal: AbortSignal | undefined): ScanFailure | null {
+  if (signal?.aborted !== true) return null;
+  return signal.reason instanceof ScanFailure ? signal.reason : new ScanFailure("ABORTED", "Scanning was aborted.", { cause: signal.reason });
+}
+
+/**
  * Coordinates caller cancellation and elapsed-time limits for scanner operations.
  *
  * @class

@@ -48,8 +48,20 @@ export interface ImageRegion {
   height: number;
 }
 
-function sourceBuffer(data: Uint8Array): Buffer {
-  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+/**
+ * Resolves a loaded input into the source `sharp` should read.
+ *
+ * A file-backed input is handed to `sharp` as a path so libvips reads the spooled bytes itself; the document
+ * never has to be materialized in the process just to be decoded. `loadInput` guarantees that a spool only ever
+ * reaches this point in a format libvips reads eagerly, because a lazily decoded one would leave its descriptor
+ * open and strand the temporary file; see `FORMATS_DECODED_FROM_MEMORY` in `load-input.ts`.
+ *
+ * @param {LoadedInput} input - The validated image bytes or their temporary file.
+ * @returns {Buffer|string} The in-memory bytes, or the path holding them.
+ */
+function sharpSource(input: LoadedInput): Buffer | string {
+  if (input.data === null) return input.path;
+  return Buffer.from(input.data.buffer, input.data.byteOffset, input.data.byteLength);
 }
 
 /**
@@ -62,7 +74,7 @@ function sourceBuffer(data: Uint8Array): Buffer {
  */
 export async function inspectImage(input: LoadedInput, maxInputPixels: number): Promise<ImageInfo> {
   try {
-    const metadata = await sharp(sourceBuffer(input.data), { failOn: "warning", limitInputPixels: false, pages: 1 }).metadata();
+    const metadata = await sharp(sharpSource(input), { failOn: "warning", limitInputPixels: false, pages: 1 }).metadata();
     const width = metadata.autoOrient.width;
     const height = metadata.autoOrient.height;
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) throw new ScanFailure("INVALID_IMAGE", "The image does not declare valid dimensions.");
@@ -94,7 +106,7 @@ export async function decodeImage(input: LoadedInput, info: ImageInfo, maxDimens
   const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
   const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
   try {
-    let pipeline = sharp(sourceBuffer(input.data), { failOn: "warning", limitInputPixels: info.width * info.height, pages: 1 }).autoOrient().flatten({ background: "#ffffff" }).toColourspace("srgb");
+    let pipeline = sharp(sharpSource(input), { failOn: "warning", limitInputPixels: info.width * info.height, pages: 1 }).autoOrient().flatten({ background: "#ffffff" }).toColourspace("srgb");
     if (region !== undefined) pipeline = pipeline.extract(region);
     if (scale < 1) pipeline = pipeline.resize(targetWidth, targetHeight, { fit: "fill", kernel: sharp.kernel.lanczos3 });
     const decoded = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });

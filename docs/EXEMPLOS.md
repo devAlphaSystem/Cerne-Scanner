@@ -87,6 +87,55 @@ const result = await scanDocument(bytes, {
 
 `Buffer` é aceito como `Uint8Array`. A biblioteca cria uma cópia própria antes de processar, de modo que alterações posteriores no buffer do chamador não mudam a entrada em andamento.
 
+## Digitalizar um `Readable`
+
+```js
+import { createReadStream } from "node:fs";
+import { scanDocument } from "cerne-scanner";
+
+const result = await scanDocument(createReadStream("./foto.jpg"), {
+  streamStorage: "auto",
+  streamMemoryThresholdBytes: 1024 * 1024,
+  maxFileSizeBytes: 25 * 1024 * 1024,
+});
+```
+
+Com `auto`, a imagem fica na memória até 1 MiB e migra para um arquivo temporário do scanner acima disso, sem reiniciar a leitura. O temporário é removido ao fim da chamada, inclusive em erro, timeout ou aborto.
+
+## Receber um upload sem acumular na memória
+
+```js
+import { scanDocument } from "cerne-scanner";
+
+async function digitalizarUpload(requisicao, signal) {
+  return scanDocument(requisicao, {
+    streamStorage: "file",
+    streamTempDirectory: "/var/tmp/cerne",
+    maxFileSizeBytes: 25 * 1024 * 1024,
+    output: { format: "pdf" },
+    signal,
+  });
+}
+```
+
+`requisicao` pode ser qualquer `Readable`, incluindo o `IncomingMessage` de um servidor HTTP. Com `file`, cada bloco é gravado no temporário assim que chega e o próximo bloco só é lido depois da gravação, então o produtor é limitado pela velocidade do disco em vez de encher a memória. `streamTempDirectory` precisa existir; se não for possível criar o arquivo ali, a chamada devolve `RESOURCE_LIMIT` em vez de gravar em outro lugar.
+
+## Digitalizar um gerador assíncrono
+
+```js
+import { scanDocument } from "cerne-scanner";
+
+async function* blocos(partes) {
+  for (const parte of partes) {
+    yield parte;
+  }
+}
+
+const result = await scanDocument(blocos(partes), { streamStorage: "memory" });
+```
+
+Qualquer `AsyncIterable<Uint8Array>` é aceito pelo mesmo caminho do `Readable`. Todo bloco precisa ser `Uint8Array` ou `Buffer`; qualquer outro tipo devolve `INVALID_INPUT`.
+
 ## Usar URL autenticada
 
 ```js

@@ -26,6 +26,8 @@ O pacote fornece declarações TypeScript separadas para ESM e CommonJS. A super
 | Outra `string`                       | Caminho de arquivo local.                                                        |
 | `ArrayBuffer`                        | Copiado para memória própria antes do processamento.                             |
 | `Uint8Array`                         | Copiado para memória própria. `Buffer` funciona por ser subtipo de `Uint8Array`. |
+| `Readable`                           | Consumido bloco a bloco sob a política de `streamStorage`.                       |
+| `AsyncIterable<Uint8Array>`          | Mesmo caminho do `Readable`; qualquer gerador assíncrono de bytes serve.         |
 
 Strings vazias e esquemas remotos diferentes de HTTP(S) são rejeitados. URLs não podem conter usuário/senha; autenticação remota deve usar `requestHeaders`.
 
@@ -97,27 +99,75 @@ O perfil padrão é `balanced`. Valores explícitos das quatro opções substitu
 
 ### Tabela completa
 
-| Opção                   | Padrão     | Validação e efeito                                                                                                      |
-| ----------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `performance`           | `balanced` | `fast`, `balanced` ou `accurate`.                                                                                       |
-| `output.format`         | `png`      | `png`, `jpeg`, `webp` ou `pdf`.                                                                                         |
-| `output.encoding`       | `buffer`   | `buffer`, `base64` ou `data-url`.                                                                                       |
-| `output.quality`        | `92`       | Inteiro de 1 a 100; afeta JPEG, WebP e raster JPEG do PDF.                                                              |
-| `enhancement`           | `color`    | `none`, `color`, `grayscale` ou `black-white`. Somente em `scanDocument`.                                               |
-| `paperSize`             | `detected` | `detected`, `auto`, `a4` ou `letter`. Somente em `scanDocument`.                                                        |
-| `manualCorners`         | ausente    | Quatro pontos finitos em coordenadas da origem orientada por EXIF; pula a detecção automática.                          |
-| `minConfidence`         | `0.58`     | Número de 0 a 1; menor nota automática aceita.                                                                          |
-| `minDocumentAreaRatio`  | `0.12`     | Número de 0,02 a 0,95; menor área considerada durante a geração automática de candidatos.                               |
-| `minSuccessAreaRatio`   | `0.20`     | Número de 0 a 0,95; candidato automático menor que isso produz `partial`, mesmo que passe confiança.                    |
-| `paddingRatio`          | `0.003`    | Número de 0 a 0,05; expande os cantos antes da transformação. Não altera `detectDocument`.                              |
-| `allowFrameFallback`    | `true`     | Permite usar a imagem inteira como documento parcial quando sua aparência for compatível.                               |
-| `detectionMaxDimension` | por perfil | Inteiro de 320 a 4.096; maior eixo do raster de detecção automática.                                                    |
-| `maxFileSizeBytes`      | 40 MiB     | Inteiro de 1 byte a 1 GiB; limita arquivo, download ou bytes em memória.                                                |
-| `maxInputPixels`        | por perfil | Inteiro de 250.000 a 250.000.000; limita área orientada declarada antes do raster.                                      |
-| `maxOutputPixels`       | por perfil | Inteiro de 250.000 a 100.000.000; limita o raster corrigido. Somente em `scanDocument`.                                 |
-| `timeoutMs`             | por perfil | Inteiro de 0 a 3.600.000; zero desativa deadline.                                                                       |
-| `requestHeaders`        | ausente    | Objeto simples de strings para URL HTTP(S); nomes são validados/normalizados e cabeçalhos de transporte são bloqueados. |
-| `signal`                | ausente    | `AbortSignal` usado no carregamento e nos pontos de verificação do processamento.                                       |
+| Opção                        | Padrão     | Validação e efeito                                                                                                      |
+| ---------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `performance`                | `balanced` | `fast`, `balanced` ou `accurate`.                                                                                       |
+| `output.format`              | `png`      | `png`, `jpeg`, `webp` ou `pdf`.                                                                                         |
+| `output.encoding`            | `buffer`   | `buffer`, `base64` ou `data-url`.                                                                                       |
+| `output.quality`             | `92`       | Inteiro de 1 a 100; afeta JPEG, WebP e raster JPEG do PDF.                                                              |
+| `enhancement`                | `color`    | `none`, `color`, `grayscale` ou `black-white`. Somente em `scanDocument`.                                               |
+| `paperSize`                  | `detected` | `detected`, `auto`, `a4` ou `letter`. Somente em `scanDocument`.                                                        |
+| `manualCorners`              | ausente    | Quatro pontos finitos em coordenadas da origem orientada por EXIF; pula a detecção automática.                          |
+| `minConfidence`              | `0.58`     | Número de 0 a 1; menor nota automática aceita.                                                                          |
+| `minDocumentAreaRatio`       | `0.12`     | Número de 0,02 a 0,95; menor área considerada durante a geração automática de candidatos.                               |
+| `minSuccessAreaRatio`        | `0.20`     | Número de 0 a 0,95; candidato automático menor que isso produz `partial`, mesmo que passe confiança.                    |
+| `paddingRatio`               | `0.003`    | Número de 0 a 0,05; expande os cantos antes da transformação. Não altera `detectDocument`.                              |
+| `allowFrameFallback`         | `true`     | Permite usar a imagem inteira como documento parcial quando sua aparência for compatível.                               |
+| `detectionMaxDimension`      | por perfil | Inteiro de 320 a 4.096; maior eixo do raster de detecção automática.                                                    |
+| `maxFileSizeBytes`           | 40 MiB     | Inteiro de 1 byte a 1 GiB; limita arquivo, download, stream ou bytes em memória.                                        |
+| `maxInputPixels`             | por perfil | Inteiro de 250.000 a 250.000.000; limita área orientada declarada antes do raster.                                      |
+| `maxOutputPixels`            | por perfil | Inteiro de 250.000 a 100.000.000; limita o raster corrigido. Somente em `scanDocument`.                                 |
+| `timeoutMs`                  | por perfil | Inteiro de 0 a 3.600.000; zero desativa deadline.                                                                       |
+| `streamStorage`              | `auto`     | `memory`, `file` ou `auto`. Aplica-se somente a `Readable` e `AsyncIterable`.                                           |
+| `streamMemoryThresholdBytes` | 8 MiB      | Inteiro de 1 byte a 1 GiB; memória máxima de um stream `auto` antes de migrar para arquivo temporário.                  |
+| `streamTempDirectory`        | temp do SO | Caminho de um diretório existente que recebe os temporários do scanner.                                                 |
+| `requestHeaders`             | ausente    | Objeto simples de strings para URL HTTP(S); nomes são validados/normalizados e cabeçalhos de transporte são bloqueados. |
+| `signal`                     | ausente    | `AbortSignal` usado no carregamento e nos pontos de verificação do processamento.                                       |
+
+### Entradas em stream
+
+```js
+import { scanDocument } from "cerne-scanner";
+
+const result = await scanDocument(readable, {
+  streamStorage: "auto",
+  streamMemoryThresholdBytes: 1024 * 1024,
+  maxFileSizeBytes: 25 * 1024 * 1024,
+  signal,
+});
+```
+
+```ts
+type StreamStorage = "memory" | "file" | "auto";
+```
+
+| Política | Onde os bytes ficam                                                                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memory` | Acumula na memória do processo, respeitando `maxFileSizeBytes`. Nenhum arquivo é criado.                                                                                              |
+| `file`   | Grava cada bloco em um temporário do scanner assim que ele chega. Durante a recepção o documento completo nunca é montado na memória.                                                 |
+| `auto`   | Padrão. Mantém na memória até `streamMemoryThresholdBytes`; ao ultrapassá-lo, cria o temporário, grava os blocos já recebidos e direciona os seguintes ao arquivo, sem reler a fonte. |
+
+Regras que valem para as três políticas:
+
+- os blocos são puxados um a um e cada gravação é aguardada antes do próximo bloco, então o produtor é limitado pela velocidade do destino (backpressure real);
+- o tamanho aceito vem dos bytes que realmente chegaram, nunca de um comprimento anunciado pelo produtor; ao ultrapassar `maxFileSizeBytes` a leitura é interrompida com `FILE_TOO_LARGE`;
+- todo bloco precisa ser `Uint8Array` ou `Buffer`; qualquer outro tipo produz `INVALID_INPUT`;
+- o `signal` é verificado antes da leitura, entre blocos e após cada gravação, e um `Readable` é destruído ao abortar;
+- em `auto`, a memória retida é no máximo o limite configurado mais o bloco em processamento.
+
+A política não se aplica a `Buffer`, `Uint8Array`, `ArrayBuffer`, caminho local ou URL. Bytes já recebidos em memória não são gravados em disco, porque a alocação já aconteceu; o download remoto continua com o comportamento anterior.
+
+#### Arquivos temporários
+
+- O nome é aleatório (24 bytes de entropia), sem nenhum trecho vindo do chamador ou do conteúdo, e o arquivo é criado com `wx` e modo `0600`: um caminho já existente, inclusive um symlink plantado, faz a criação falhar em vez de ser seguido.
+- O diretório é `streamTempDirectory` quando informado e, caso contrário, o diretório temporário do sistema. O caminho é resolvido para absoluto na validação de opções; o diretório precisa existir, e um diretório inutilizável produz `RESOURCE_LIMIT` em vez de gravar em outro lugar silenciosamente.
+- A remoção acontece no `finally` de `scanDocument` e `detectDocument`, portanto também em erro, `TIMEOUT`, `ABORTED`, falha de decodificação e `not_found`.
+- Caminhos fornecidos pelo chamador nunca são removidos, e nenhum caminho temporário aparece em resultados, avisos ou mensagens de erro.
+- Enquanto o temporário existe, o `sharp` lê diretamente dele: o documento não é materializado no processo apenas para ser decodificado. A exceção é o WebP: o carregador do libvips decodifica preguiçosamente e mantém o descritor do arquivo aberto, e um descritor retido impede a remoção do temporário no Windows. Nesse formato o temporário é lido de volta e removido antes da decodificação, ao custo do tamanho comprimido do arquivo — na ordem de 1% do raster RGBA que a decodificação materializa de qualquer maneira.
+
+#### Compatibilidade
+
+A mudança é retrocompatível. `ScanInput` ganhou dois membros na união, `ScanOptions` ganhou três campos opcionais e nenhum comportamento anterior mudou: código existente que passa caminho, URL ou bytes continua idêntico, inclusive nos códigos de erro. O requisito de runtime segue sendo Node.js 20 ou superior, validado em Node.js 20, 22 e 24.
 
 ### Formato de saída
 
@@ -278,19 +328,19 @@ Além de condições `partial`, um candidato automático que passa `minConfidenc
 
 ## Códigos de erro
 
-| Código               | Origem típica                                                                                      |
-| -------------------- | -------------------------------------------------------------------------------------------------- |
-| `INVALID_INPUT`      | Tipo vazio/inválido, caminho que não é arquivo, esquema remoto proibido ou leitura local genérica. |
-| `FILE_NOT_FOUND`     | Caminho local inexistente.                                                                         |
-| `FILE_TOO_LARGE`     | Bytes excedem `maxFileSizeBytes`, por metadado HTTP ou leitura real.                               |
-| `DOWNLOAD_ERROR`     | Fetch, redirect, status HTTP, corpo ou leitura remota falhou.                                      |
-| `INVALID_OPTIONS`    | Tipo, enum, faixa, headers, sinal ou cantos não cumprem o contrato.                                |
-| `UNSUPPORTED_FORMAT` | Assinatura não suportada, animação ou imagem multipágina.                                          |
-| `INVALID_IMAGE`      | Metadados ou raster não podem ser decodificados com segurança.                                     |
-| `TIMEOUT`            | Deadline configurado foi alcançado.                                                                |
-| `ABORTED`            | `AbortSignal` do chamador foi acionado.                                                            |
-| `RESOURCE_LIMIT`     | Eixo/pixels excedidos, `RangeError` ou limite de dimensão/memória.                                 |
-| `PROCESSING_ERROR`   | Falha inesperada de OpenCV, transformação, realce ou codificação.                                  |
+| Código               | Origem típica                                                                                                                                                                 |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INVALID_INPUT`      | Tipo vazio/inválido, caminho que não é arquivo, esquema remoto proibido, leitura local genérica, bloco de stream que não é byte array ou stream que falhou durante a leitura. |
+| `FILE_NOT_FOUND`     | Caminho local inexistente.                                                                                                                                                    |
+| `FILE_TOO_LARGE`     | Bytes excedem `maxFileSizeBytes`, por metadado HTTP ou leitura real.                                                                                                          |
+| `DOWNLOAD_ERROR`     | Fetch, redirect, status HTTP, corpo ou leitura remota falhou.                                                                                                                 |
+| `INVALID_OPTIONS`    | Tipo, enum, faixa, headers, sinal ou cantos não cumprem o contrato.                                                                                                           |
+| `UNSUPPORTED_FORMAT` | Assinatura não suportada, animação ou imagem multipágina.                                                                                                                     |
+| `INVALID_IMAGE`      | Metadados ou raster não podem ser decodificados com segurança.                                                                                                                |
+| `TIMEOUT`            | Deadline configurado foi alcançado.                                                                                                                                           |
+| `ABORTED`            | `AbortSignal` do chamador foi acionado.                                                                                                                                       |
+| `RESOURCE_LIMIT`     | Eixo/pixels excedidos, `RangeError`, limite de dimensão/memória ou falha ao gravar o temporário de stream.                                                                    |
+| `PROCESSING_ERROR`   | Falha inesperada de OpenCV, transformação, realce ou codificação.                                                                                                             |
 
 Mensagens são próprias para exibição/log operacional, mas não incluem a exceção original. Não dependa do texto para automação; use `error.code`.
 

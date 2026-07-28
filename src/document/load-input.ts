@@ -1,8 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
+import { failureFromSignal } from "../deadline";
 import { ScanFailure } from "../errors";
-import type { InputImageFormat, ScanInput } from "../types";
+import { DEFAULT_STREAM_MEMORY_THRESHOLD_BYTES, DEFAULT_STREAM_STORAGE } from "../options";
+import type { InputImageFormat, ScanInput, StreamStorage } from "../types";
 import { detectImageFormat } from "./detect-format";
+import { captureStream, isAsyncByteSource } from "./read-stream";
 
 const MAX_REDIRECTS = 5;
 const INITIAL_DOWNLOAD_BUFFER_BYTES = 64 * 1024;
@@ -13,46 +17,87 @@ const HTTP_URL = /^https?:\/\//i;
 const URI_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
 /**
- * Represents owned image bytes after size and format validation.
+ * Names the formats libvips decodes lazily straight from the file, keeping the descriptor open past the call.
+ *
+ * A spooled stream in one of these formats can never be handed to the decoder as a path: the retained descriptor
+ * survives in the libvips operation cache, and on Windows an open handle makes the spool impossible to unlink, so
+ * the temporary file would be left behind on every scan. Reading the spool back and dropping it here keeps the
+ * decoder away from the path entirely. The other formats are read eagerly and release the file on their own, so
+ * they keep the zero-copy path.
+ *
+ * `bench/fixtures/photo-rotated.webp` is the regression fixture; re-probe this set after a sharp or libvips
+ * upgrade, since which loaders decode lazily is a property of that library rather than of this one.
  */
-export interface LoadedInput {
-  /** Stores an owned view of the validated image bytes. */
-  data: Uint8Array;
+const FORMATS_DECODED_FROM_MEMORY: ReadonlySet<InputImageFormat> = new Set(["webp"]);
+
+interface LoadedInputFields {
   /** Reports the validated image size in bytes. */
   size: number;
   /** Identifies the image format detected from its byte signature. */
   format: InputImageFormat;
+  /** Releases the scanner-owned temporary file backing this input, if any. It never removes a caller-supplied path. */
+  cleanup: () => Promise<void>;
 }
 
 /**
- * Configures request metadata and cancellation while loading an image input.
+ * Represents validated image bytes resident in process memory.
+ */
+export interface LoadedBytes extends LoadedInputFields {
+  /** Stores an owned view of the validated image bytes. */
+  data: Uint8Array;
+  /** Marks the input as memory-resident. */
+  path: null;
+}
+
+/**
+ * Represents validated image bytes held in a scanner-owned temporary file.
+ */
+export interface LoadedFile extends LoadedInputFields {
+  /** Marks the input as file-backed. */
+  data: null;
+  /** Locates the scanner-owned temporary file holding the validated bytes. */
+  path: string;
+}
+
+/**
+ * Represents owned image bytes after size and format validation, held either in memory or in a scanner-owned temporary file.
+ */
+export type LoadedInput = LoadedBytes | LoadedFile;
+
+/**
+ * Configures request metadata, stream storage, and cancellation while loading an image input.
  */
 export interface LoadInputControls {
   /** Supplies HTTP(S) headers that are removed after cross-origin or HTTPS-to-HTTP redirects. */
   requestHeaders?: Readonly<Record<string, string>>;
-  /** Cancels an in-progress local file read or remote download when aborted. */
+  /** Cancels an in-progress local file read, remote download, or stream read when aborted. */
   signal?: AbortSignal;
+  /** Selects where a `Readable` or async-iterable input is held while it is consumed, defaulting to `auto`. */
+  streamStorage?: StreamStorage;
+  /** Sets the byte count an `auto` stream may hold in memory before migrating to a temporary file. */
+  streamMemoryThresholdBytes?: number;
+  /** Selects the existing directory that receives scanner-owned temporary stream files. */
+  streamTempDirectory?: string;
 }
 
-function signalFailure(signal: AbortSignal | undefined): ScanFailure | null {
-  if (signal?.aborted !== true) return null;
-  return signal.reason instanceof ScanFailure ? signal.reason : new ScanFailure("ABORTED", "Scanning was aborted.", { cause: signal.reason });
+function noResources(): Promise<void> {
+  return Promise.resolve();
 }
 
-function validateBytes(data: Uint8Array, maxFileSizeBytes: number): InputImageFormat {
-  if (data.byteLength === 0) throw new ScanFailure("INVALID_INPUT", "The image input is empty.");
-  if (data.byteLength > maxFileSizeBytes) throw new ScanFailure("FILE_TOO_LARGE", `The image exceeds the configured ${maxFileSizeBytes}-byte limit.`);
-  const format = detectImageFormat(data);
+function validatedFormat(header: Uint8Array, size: number, maxFileSizeBytes: number): InputImageFormat {
+  if (size === 0) throw new ScanFailure("INVALID_INPUT", "The image input is empty.");
+  if (size > maxFileSizeBytes) throw new ScanFailure("FILE_TOO_LARGE", `The image exceeds the configured ${maxFileSizeBytes}-byte limit.`);
+  const format = detectImageFormat(header);
   if (format === null) throw new ScanFailure("UNSUPPORTED_FORMAT", "The input bytes do not match a supported JPEG, PNG, WebP, TIFF, AVIF, or HEIF signature.");
   return format;
 }
 
 function checkedBytes(data: Uint8Array, maxFileSizeBytes: number, copy: boolean): LoadedInput {
-  const format = validateBytes(data, maxFileSizeBytes);
-  if (!copy) return { data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength), size: data.byteLength, format };
+  const format = validatedFormat(data, data.byteLength, maxFileSizeBytes);
+  if (!copy) return { data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength), path: null, size: data.byteLength, format, cleanup: noResources };
   const owned = new Uint8Array(data.byteLength);
   owned.set(data);
-  return { data: owned, size: owned.byteLength, format };
+  return { data: owned, path: null, size: owned.byteLength, format, cleanup: noResources };
 }
 
 function remoteUrlFromInput(input: string): URL | null {
@@ -141,7 +186,7 @@ async function readRemoteBody(response: Response, maxFileSizeBytes: number, sign
     return loaded;
   } catch (error) {
     if (error instanceof ScanFailure) throw error;
-    const stopped = signalFailure(signal);
+    const stopped = failureFromSignal(signal);
     if (stopped !== null) throw stopped;
     throw new ScanFailure("DOWNLOAD_ERROR", "The remote image response could not be read.", { cause: error });
   } finally {
@@ -169,7 +214,7 @@ async function downloadImage(initialUrl: URL, maxFileSizeBytes: number, controls
     try {
       response = await fetch(currentUrl, { method: "GET", headers, redirect: "manual", ...(controls.signal === undefined ? {} : { signal: controls.signal }) });
     } catch (error) {
-      const stopped = signalFailure(controls.signal);
+      const stopped = failureFromSignal(controls.signal);
       if (stopped !== null) throw stopped;
       throw new ScanFailure("DOWNLOAD_ERROR", "The remote image could not be downloaded.", { cause: error });
     }
@@ -199,16 +244,54 @@ async function downloadImage(initialUrl: URL, maxFileSizeBytes: number, controls
 }
 
 /**
- * Loads, owns, and validates image bytes from memory, a local path, or an
+ * Loads a `Readable` or async byte iterable under the configured storage policy and validates the result.
+ *
+ * A temporary file created here is removed before the failure is rethrown, so a rejected load never leaves one
+ * behind; a successful load transfers that responsibility to the returned `cleanup`.
+ *
+ * @param {AsyncIterable<Uint8Array>} input - The stream to consume.
+ * @param {number} maxFileSizeBytes - The maximum accepted image size in bytes.
+ * @param {LoadInputControls} controls - The storage policy, temporary directory, and cancellation signal.
+ * @returns {Promise<LoadedInput>} Resolves with the received bytes or their temporary file, size, and detected format.
+ * @throws {ScanFailure} If the stream is cancelled, exceeds the size limit, is empty, yields a non-byte chunk, or carries an unsupported signature.
+ */
+async function loadStream(input: AsyncIterable<Uint8Array>, maxFileSizeBytes: number, controls: LoadInputControls): Promise<LoadedInput> {
+  const captured = await captureStream(input, {
+    storage: controls.streamStorage ?? DEFAULT_STREAM_STORAGE,
+    memoryThresholdBytes: controls.streamMemoryThresholdBytes ?? DEFAULT_STREAM_MEMORY_THRESHOLD_BYTES,
+    temporaryDirectory: controls.streamTempDirectory ?? tmpdir(),
+    maxFileSizeBytes,
+    ...(controls.signal === undefined ? {} : { signal: controls.signal }),
+  });
+  try {
+    const format = validatedFormat(captured.header, captured.size, maxFileSizeBytes);
+    if (captured.data !== null) return { data: captured.data, path: null, size: captured.size, format, cleanup: noResources };
+    if (FORMATS_DECODED_FROM_MEMORY.has(format)) {
+      const data = await readFile(captured.path, { ...(controls.signal === undefined ? {} : { signal: controls.signal }) });
+      await captured.cleanup();
+      return { data, path: null, size: captured.size, format, cleanup: noResources };
+    }
+    return { data: null, path: captured.path, size: captured.size, format, cleanup: captured.cleanup };
+  } catch (error) {
+    await captured.cleanup();
+    throw error;
+  }
+}
+
+/**
+ * Loads, owns, and validates image bytes from memory, a stream, a local path, or an
  * HTTP(S) URL before image decoding begins.
  *
- * @param {ScanInput} input - The in-memory bytes, local path, or HTTP(S) URL to load.
+ * @param {ScanInput} input - The in-memory bytes, `Readable`, async byte iterable, local path, or HTTP(S) URL to load.
  * @param {number} maxFileSizeBytes - The maximum accepted image size in bytes.
- * @param {LoadInputControls} [controls={}] - Optional request headers and cancellation signal.
+ * @param {LoadInputControls} [controls={}] - Optional request headers, stream storage settings, and cancellation signal.
  * @param {Readonly<Record<string, string>>} [controls.requestHeaders] - Caller headers for HTTP(S) requests.
- * @param {AbortSignal} [controls.signal] - Cancellation signal for file reads and remote downloads.
- * @returns {Promise<LoadedInput>} Resolves with owned bytes, their size, and the detected format.
- * @throws {ScanFailure} If the input, request controls, image format, file access, download, cancellation, or size is invalid.
+ * @param {AbortSignal} [controls.signal] - Cancellation signal for file reads, remote downloads, and stream reads.
+ * @param {StreamStorage} [controls.streamStorage] - Storage policy applied to stream inputs only.
+ * @param {number} [controls.streamMemoryThresholdBytes] - Memory ceiling before an `auto` stream migrates to a temporary file.
+ * @param {string} [controls.streamTempDirectory] - Existing directory that receives scanner-owned temporary files.
+ * @returns {Promise<LoadedInput>} Resolves with owned bytes or a scanner-owned temporary file, the size, and the detected format.
+ * @throws {ScanFailure} If the input, request controls, image format, file access, download, stream, cancellation, or size is invalid.
  * @throws {TypeError} If request headers are invalid or the supplied `ArrayBuffer` has been detached.
  * @throws {RangeError} If an in-memory input cannot be copied within available memory.
  *
@@ -231,7 +314,7 @@ export async function loadInput(input: ScanInput, maxFileSizeBytes: number, cont
       return checkedBytes(await readFile(input, { signal: controls.signal }), maxFileSizeBytes, false);
     } catch (error) {
       if (error instanceof ScanFailure) throw error;
-      const stopped = signalFailure(controls.signal);
+      const stopped = failureFromSignal(controls.signal);
       if (stopped !== null) throw stopped;
       const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
       if (code === "ENOENT") throw new ScanFailure("FILE_NOT_FOUND", "The image file was not found.", { cause: error });
@@ -242,5 +325,6 @@ export async function loadInput(input: ScanInput, maxFileSizeBytes: number, cont
   if (controls.requestHeaders !== undefined) throw new ScanFailure("INVALID_OPTIONS", "requestHeaders can only be used with an HTTP(S) URL input.");
   if (input instanceof Uint8Array) return checkedBytes(input, maxFileSizeBytes, true);
   if (input instanceof ArrayBuffer) return checkedBytes(new Uint8Array(input), maxFileSizeBytes, true);
-  throw new ScanFailure("INVALID_INPUT", "Input must be a local path, HTTP(S) URL, ArrayBuffer, Buffer, or Uint8Array.");
+  if (isAsyncByteSource(input)) return loadStream(input, maxFileSizeBytes, controls);
+  throw new ScanFailure("INVALID_INPUT", "Input must be a local path, HTTP(S) URL, ArrayBuffer, Buffer, Uint8Array, Readable, or async iterable of byte chunks.");
 }

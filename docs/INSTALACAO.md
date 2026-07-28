@@ -70,7 +70,7 @@ Scripts declarados em `package.json`:
 | `npm run prepack`        | Executa `check` antes de empacotar.                                |
 | `npm run prepare`        | Reaplica o patch local do Prettier via `patch-package`.            |
 
-Não há script de servidor, watcher ou teste unitário no manifesto atual. O CI verifica tipos, lint, formatação e build; o benchmark sintético é a verificação de regressão funcional e de desempenho disponível no repositório, mas não aparece no workflow de CI atual.
+Não há script de servidor ou watcher no manifesto atual. O CI verifica tipos, lint, formatação e build; o benchmark sintético é a verificação de regressão de resultado e desempenho disponível no repositório, mas não aparece no workflow de CI atual.
 
 ### Patch do Prettier
 
@@ -120,7 +120,7 @@ O workflow usa permissões `contents: read` e é acionado em `push` e `pull_requ
 
 ## Verificação após instalação
 
-Um smoke test útil é aquecer o runtime antes de ler dados de produção:
+Uma verificação rápida útil é aquecer o runtime antes de ler dados de produção:
 
 ```js
 import { warmupScanner } from "cerne-scanner";

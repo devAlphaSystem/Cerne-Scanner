@@ -1,7 +1,7 @@
 {
   "name": "cerne-scanner",
-  "version": "0.3.0",
-  "updated": "2026.07.27.2023",
+  "version": "0.4.0",
+  "updated": "2026.07.28.1055",
   "description": "Detecta folhas em fotografias, corrige perspectiva e devolve documentos em PNG, JPEG, WebP, PDF, bytes, Base64 ou Data URL usando somente CPU.",
   "type": "module",
   "main": "./dist/index.cjs",

@@ -10,6 +10,17 @@ import { warpPerspective } from "./processing/warp-perspective";
 import { elapsedMilliseconds, startTimer, type MonotonicTimestamp } from "./timing";
 import type { DetectionMetadata, DetectionResult, DocumentCorners, DocumentDetection, EncodedScanData, OutputEncoding, ScanErrorInfo, ScanInput, ScanMetadata, ScanOptions, ScanOutputInfo, ScanResult, ScanStatus } from "./types";
 
+/**
+ * Holds the loaded input as soon as it exists so cleanup can run even when a later stage fails.
+ *
+ * A stream stored under the `file` or `auto` policy owns a temporary file that outlives loading: `sharp` reads
+ * it during inspection, detection, and transformation. Without this handle, a failure between loading and the
+ * assembled context would leave that file on disk.
+ */
+interface LoadedSlot {
+  current: LoadedInput | null;
+}
+
 interface DetectionContext {
   options: ResolvedOptions;
   loaded: LoadedInput;
@@ -88,10 +99,17 @@ function scaleCorners(corners: DocumentCorners, detectionWidth: number, detectio
   return { topLeft: points[0], topRight: points[1], bottomRight: points[2], bottomLeft: points[3] };
 }
 
-async function prepareDetection(input: ScanInput, options: ResolvedOptions, guard: WorkGuard): Promise<DetectionContext> {
+async function prepareDetection(input: ScanInput, options: ResolvedOptions, guard: WorkGuard, slot: LoadedSlot): Promise<DetectionContext> {
   const loadStarted = startTimer();
   guard.check();
-  const loaded = await loadInput(input, options.maxFileSizeBytes, { ...(options.requestHeaders === undefined ? {} : { requestHeaders: options.requestHeaders }), signal: guard.signal });
+  const loaded = await loadInput(input, options.maxFileSizeBytes, {
+    ...(options.requestHeaders === undefined ? {} : { requestHeaders: options.requestHeaders }),
+    signal: guard.signal,
+    streamStorage: options.streamStorage,
+    streamMemoryThresholdBytes: options.streamMemoryThresholdBytes,
+    ...(options.streamTempDirectory === undefined ? {} : { streamTempDirectory: options.streamTempDirectory }),
+  });
+  slot.current = loaded;
   guard.check();
   const imageInfo = await inspectImage(loaded, options.maxInputPixels);
   guard.check();
@@ -163,12 +181,13 @@ function emptyDetectionMetadata(performance: ResolvedOptions["performance"] | "b
  */
 export async function detectDocument(input: ScanInput, suppliedOptions: Omit<ScanOptions, "output" | "enhancement" | "paperSize" | "maxOutputPixels"> = {}): Promise<DetectionResult> {
   const startedAt = startTimer();
+  const slot: LoadedSlot = { current: null };
   let options: ResolvedOptions | undefined;
   let guard: WorkGuard | undefined;
   try {
     options = resolveOptions(suppliedOptions, "detect");
     guard = new WorkGuard(options, startedAt);
-    const context = await prepareDetection(input, options, guard);
+    const context = await prepareDetection(input, options, guard, slot);
     return {
       status: context.status,
       success: context.detection !== null,
@@ -188,6 +207,24 @@ export async function detectDocument(input: ScanInput, suppliedOptions: Omit<Sca
     };
   } finally {
     guard?.dispose();
+    await releaseLoaded(slot);
+  }
+}
+
+/**
+ * Removes any scanner-owned temporary file without letting cleanup replace the structured result.
+ *
+ * It runs after the outcome is decided, so a failing unlink must not reject a promise the contract promises to
+ * resolve. Caller-supplied paths are never touched: only a stream spooled by the scanner has a `cleanup`.
+ *
+ * @param {LoadedSlot} slot - The slot holding the loaded input, if loading got that far.
+ * @returns {Promise<void>} Resolves once the attempt settles, successfully or not.
+ */
+async function releaseLoaded(slot: LoadedSlot): Promise<void> {
+  try {
+    await slot.current?.cleanup();
+  } catch {
+    // Cleanup must not replace the primary result.
   }
 }
 
@@ -259,13 +296,14 @@ function emptyScanMetadata(options: ResolvedOptions | undefined, startedAt: Mono
  */
 export async function scanDocument<TEncoding extends OutputEncoding = "buffer">(input: ScanInput, suppliedOptions: ScanOptions<TEncoding> = {}): Promise<ScanResult<TEncoding>> {
   const startedAt = startTimer();
+  const slot: LoadedSlot = { current: null };
   let options: ResolvedOptions | undefined;
   let guard: WorkGuard | undefined;
   let context: DetectionContext | undefined;
   try {
     options = resolveOptions(suppliedOptions, "scan");
     guard = new WorkGuard(options, startedAt);
-    context = await prepareDetection(input, options, guard);
+    context = await prepareDetection(input, options, guard, slot);
     if (context.detection === null) {
       return {
         status: "not_found",
@@ -327,5 +365,6 @@ export async function scanDocument<TEncoding extends OutputEncoding = "buffer">(
     };
   } finally {
     guard?.dispose();
+    await releaseLoaded(slot);
   }
 }
