@@ -1,0 +1,82 @@
+{
+  "name": "cerne-scanner",
+  "version": "0.1.0",
+  "updated": "2026.07.26.1931",
+  "description": "Detecta folhas em fotografias, corrige perspectiva e devolve documentos em PNG, JPEG, WebP, PDF, bytes, Base64 ou Data URL usando somente CPU.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "bin": {
+    "cerne-scanner": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "bench",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "document-scanner",
+    "perspective-correction",
+    "deskew",
+    "opencv",
+    "image",
+    "pdf",
+    "jpeg",
+    "png",
+    "webp",
+    "ocr-preprocessing"
+  ],
+  "author": "devAlphaSystem",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsup ./src/index.ts ./src/cli.ts --no-config --format esm,cjs --dts --sourcemap --clean --no-splitting --platform node --target node20 --out-dir dist",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --test",
+    "bench:fixtures": "node bench/fixtures.mjs",
+    "bench": "node bench/run.mjs",
+    "security:audit": "npm audit --audit-level=low",
+    "check": "tsc --noEmit && eslint . && prettier --check . && npm run build && npm test",
+    "prepack": "npm run check",
+    "postinstall": "patch-package"
+  },
+  "dependencies": {
+    "@opencvjs/node": "5.0.0-release.2",
+    "pdf-lib": "^1.17.1",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.1",
+    "eslint": "^10.8.0",
+    "patch-package": "^8.0.1",
+    "prettier": "3.9.4",
+    "tsup": "^8.5.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.65.0"
+  },
+  "overrides": {
+    "esbuild": "0.27.2"
+  }
+}

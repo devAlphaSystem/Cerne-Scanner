@@ -1,0 +1,20 @@
+# Dependencies
+dist
+node_modules
+
+# Runtime and environment
+.env*
+data/
+dados/
+
+# Generated benchmark artifacts
+bench/fixtures/
+bench/results/
+
+# Minified files
+*-min.js
+*-min.css
+*_min.js
+*_min.css
+*.min.js
+*.min.css
