@@ -1,7 +1,7 @@
 {
   "name": "cerne-scanner",
-  "version": "0.4.0",
-  "updated": "2026.07.28.1055",
+  "version": "0.4.1",
+  "updated": "2026.09.30.1227",
   "description": "Detecta folhas em fotografias, corrige perspectiva e devolve documentos em PNG, JPEG, WebP, PDF, bytes, Base64 ou Data URL usando somente CPU.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -55,23 +55,21 @@
     "bench": "node --expose-gc bench/run.mjs",
     "security:audit": "npm audit --audit-level=low",
     "check": "tsc --noEmit && eslint . && prettier --check . && npm run build",
-    "prepack": "npm run check",
-    "prepare": "patch-package"
+    "prepack": "npm run check"
   },
   "dependencies": {
     "@opencvjs/node": "5.0.0-release.2",
     "pdf-lib": "^1.17.1",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.1.2",
-    "eslint": "^10.8.0",
-    "patch-package": "^8.0.1",
-    "prettier": "3.9.4",
+    "@types/node": "^26.6.3",
+    "eslint": "^10.11.0",
+    "prettier": "3.9.9",
     "tsup": "^8.5.1",
     "typescript": "~5.9.3",
-    "typescript-eslint": "^8.65.0"
+    "typescript-eslint": "^8.71.0"
   },
   "overrides": {
     "esbuild": "0.27.2"

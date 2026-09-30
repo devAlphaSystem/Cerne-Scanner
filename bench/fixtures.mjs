@@ -328,9 +328,19 @@ const scanQuad = [
   { x: 0, y: PAGE_HEIGHT - 1 },
 ];
 groundTruth["page-scan.jpg"] = quadCorners(scanQuad);
-await write("page-scan.jpg", await toSharp(shade(compositeQuad(createRaster(PAGE_WIDTH, PAGE_HEIGHT, [250, 249, 245]), page, scanQuad), { seed: 2468, noise: 4, falloff: 0.06, tilt: 0.02 })).jpeg({ quality: 88, chromaSubsampling: "4:4:4" }).toBuffer());
+await write(
+  "page-scan.jpg",
+  await toSharp(shade(compositeQuad(createRaster(PAGE_WIDTH, PAGE_HEIGHT, [250, 249, 245]), page, scanQuad), { seed: 2468, noise: 4, falloff: 0.06, tilt: 0.02 }))
+    .jpeg({ quality: 88, chromaSubsampling: "4:4:4" })
+    .toBuffer(),
+);
 
-await write("nodocument.jpg", await toSharp(shade(clutterRaster(2400, 1800), { seed: 8899, noise: 9, falloff: 0.36, tilt: 0.11 })).jpeg({ quality: 82, chromaSubsampling: "4:2:0" }).toBuffer());
+await write(
+  "nodocument.jpg",
+  await toSharp(shade(clutterRaster(2400, 1800), { seed: 8899, noise: 9, falloff: 0.36, tilt: 0.11 }))
+    .jpeg({ quality: 82, chromaSubsampling: "4:2:0" })
+    .toBuffer(),
+);
 
 writeFileSync(join(OUTPUT_DIRECTORY, "corners.json"), `${JSON.stringify(groundTruth, null, 2)}\n`);
 console.log(`\nFixtures geradas em ${OUTPUT_DIRECTORY}`);

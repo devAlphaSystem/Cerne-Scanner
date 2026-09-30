@@ -106,7 +106,10 @@ export async function decodeImage(input: LoadedInput, info: ImageInfo, maxDimens
   const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
   const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
   try {
-    let pipeline = sharp(sharpSource(input), { failOn: "warning", limitInputPixels: info.width * info.height, pages: 1 }).autoOrient().flatten({ background: "#ffffff" }).toColourspace("srgb");
+    let pipeline = sharp(sharpSource(input), { failOn: "warning", limitInputPixels: info.width * info.height, pages: 1 })
+      .autoOrient()
+      .flatten({ background: "#ffffff" })
+      .toColourspace("srgb");
     if (region !== undefined) pipeline = pipeline.extract(region);
     if (scale < 1) pipeline = pipeline.resize(targetWidth, targetHeight, { fit: "fill", kernel: sharp.kernel.lanczos3 });
     const decoded = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
